@@ -8,6 +8,7 @@ import { getSupabase } from "../lib/supabase-browser";
 import { channelList, channelByKey } from "../channels/registry";
 import type { TemplateKey } from "../channels/types";
 
+/** ---------- Chat types ---------- */
 type Chat = {
   _id: string;
   title: string;
@@ -22,17 +23,19 @@ type Message = {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt?: string;
-  usedModel?: string;
+  meta?: { model?: string };
 };
 type LeftMode = "channels" | "chats";
 
+/** API bases */
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "/api";
-const API_ROOT = API_BASE.replace(/\/api\/?$/, "");
 
+/** ---------- LocalStorage keys ---------- */
 const LS_SELECTED = "ui.selectedChannel";
 const LS_LEFTMODE = "ui.leftMode";
 const LS_ACTIVE_CHAT = "chat.activeId";
 
+/** ---------- Normalizers ---------- */
 function toLocalChat(input: any): Chat {
   if (!input) return { _id: "", title: "" };
   return {
@@ -51,7 +54,7 @@ function toLocalMessage(input: any): Message {
     role: input.role,
     content: input.content,
     createdAt: input.createdAt,
-    usedModel: input.usedModel || input.used_model,
+    meta: input.meta,
   };
 }
 function normalizeChats(data: any): Chat[] {
@@ -65,6 +68,7 @@ function normalizeMessages(data: any): Message[] {
   return [];
 }
 
+/** ---------- Helpers ---------- */
 function normalizeHeadingsAndBadges(text: string) {
   let t = (text || "")
     .replace(/^###\s*H1:\s*/gm, "# ")
@@ -76,23 +80,15 @@ function normalizeHeadingsAndBadges(text: string) {
   return t;
 }
 
-function ModelBadge({ model }: { model?: string }) {
+function modelBadge(model?: string): "Z" | "M" | null {
   if (!model) return null;
-  const m = (model || "").toLowerCase();
-  const isZai = m.includes("zai");
-  const isMistral = m.includes("mistral");
-  const letter = isZai ? "z" : isMistral ? "M" : "?";
-  return (
-    <span
-      title={model}
-      className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-white/20 text-[10px] font-bold leading-none bg-[#6C5CE7] text-white/95"
-      style={{ transform: "translateY(-0.5px)" }}
-    >
-      {letter}
-    </span>
-  );
+  const m = model.toLowerCase();
+  if (m.includes("zai")) return "Z";
+  if (m.includes("mistral") || m.includes("mixtral")) return "M";
+  return null;
 }
 
+/** ---------- Page ---------- */
 export default function AppHome() {
   const supabase = getSupabase();
   const [loading, setLoading] = useState(true);
@@ -116,6 +112,7 @@ export default function AppHome() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // selection edit
   const [editUI, setEditUI] = useState<{
     open: boolean;
     x: number;
@@ -125,6 +122,7 @@ export default function AppHome() {
     instruction?: string;
   }>({ open: false, x: 0, y: 0 });
 
+  // load user email
   useEffect(() => {
     (async () => {
       const ses = await supabase?.auth.getSession();
@@ -133,6 +131,7 @@ export default function AppHome() {
     })();
   }, [supabase]);
 
+  // persist UI state
   useEffect(() => {
     selectedKey
       ? localStorage.setItem(LS_SELECTED, selectedKey)
@@ -147,6 +146,7 @@ export default function AppHome() {
       : localStorage.removeItem(LS_ACTIVE_CHAT);
   }, [activeId]);
 
+  // fetch chats on mount
   useEffect(() => {
     (async () => {
       try {
@@ -162,8 +162,10 @@ export default function AppHome() {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // fetch messages when active chat changes
   useEffect(() => {
     if (!activeId) return;
     (async () => {
@@ -206,27 +208,24 @@ export default function AppHome() {
   async function deleteChat(id: string) {
     if (!confirm("Delete this chat?")) return;
     try {
-      // Try path style first
-      await authedFetch(`${API_BASE}/chats/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-    } catch {
-      // Fallback to query style (older backends)
       await authedFetch(`${API_BASE}/chats?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
+      setChats((prev) => {
+        const updated = prev.filter((x) => x._id !== id);
+        if (activeId === id) {
+          const next = updated[0];
+          setActiveId(next ? next._id : null);
+          setMessages([]);
+        }
+        return updated;
+      });
+    } catch (e: any) {
+      setError(e.message || "Failed to delete chat");
     }
-    setChats((prev) => {
-      const updated = prev.filter((x) => x._id !== id);
-      if (activeId === id) {
-        const next = updated[0];
-        setActiveId(next ? next._id : null);
-        setMessages([]);
-      }
-      return updated;
-    });
   }
 
+  // chat composer send
   async function send() {
     if (!activeId) {
       const created = await startNewChat();
@@ -273,6 +272,7 @@ export default function AppHome() {
   const meta = selectedKey ? channelByKey[selectedKey] : null;
   const FormComp = meta?.Form;
 
+  // right-click regenerate (assistant only)
   function onBubbleContextMenu(e: React.MouseEvent, message: Message) {
     if (message.role !== "assistant") return;
     const selection = window.getSelection()?.toString() || "";
@@ -297,19 +297,16 @@ export default function AppHome() {
       const msg = messages.find((m) => m._id === editUI.messageId);
       if (!msg) return;
 
-      const res = await authedFetch<{ text: string; used_model?: string }>(
-        `${API_ROOT}/edit-paragraph`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            paragraph: editUI.selected,
-            instruction: editUI.instruction,
-            full_context: msg.content,
-          }),
-        }
-      );
+      const res = await authedFetch<{ text: string; model?: string }>(`${API_BASE}/edit-paragraph`, {
+        method: "POST",
+        body: JSON.stringify({
+          paragraph: editUI.selected,
+          instruction: editUI.instruction,
+          full_context: msg.content,
+        }),
+      });
 
-      const rewritten = (res as any).text || editUI.selected!;
+      const rewritten = (res.text || "").trim() || editUI.selected!;
       const updated = (msg.content || "").replace(editUI.selected!, rewritten);
       setMessages((arr) => arr.map((m) => (m._id === msg._id ? { ...m, content: updated } : m)));
       setEditUI((s) => ({ ...s, open: false }));
@@ -368,6 +365,9 @@ export default function AppHome() {
           </div>
         ) : (
           <div className="overflow-y-auto space-y-1">
+            {/* tiny hint */}
+            <div className="text-[10px] text-gray-500 mb-1 px-1">delete the chats you dont need</div>
+
             {loading &&
               Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="h-10 bg-white/5 rounded-lg animate-pulse" />
@@ -425,19 +425,94 @@ export default function AppHome() {
           <div className="font-semibold truncate">{activeChat ? activeChat.title : "CriptAi"}</div>
         </header>
 
+        {/* Chat area */}
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 md:p-8">
-          {selectedKey && channelByKey[selectedKey]?.Form ? (
-            <FormHost
-              key={selectedKey}
-              metaKey={selectedKey}
-              startNewChat={startNewChat}
-              setSending={setSending}
-              setError={setError}
-              setSelectedKey={setSelectedKey}
-              setLeftMode={setLeftMode}
-              setMessages={setMessages}
-              setChats={setChats}
-              scrollRef={scrollRef}
+          {FormComp && meta ? (
+            <FormComp
+              onCancel={() => setSelectedKey(null)}
+              onGenerate={async (values: Record<string, any>, options: { deepResearch?: boolean } = {}) => {
+                const title =
+                  (meta.buildTitle ? meta.buildTitle(values) : `${meta.label}: ${String(values.topic || "").slice(0, 80)}`) ||
+                  meta.label;
+
+                const created = await startNewChat(title);
+                if (!created) return;
+
+                // Build base prompt from channel
+                let prompt = meta.buildPrompt(values, options);
+
+                // Continuation: if prevScriptText was provided by the form, inject guidance
+                if (values.prevScriptText && String(values.prevScriptText).trim().length > 0) {
+                  prompt +=
+                    "\n\n---\nCONTINUATION CONTEXT\n" +
+                    "The user supplied a previous script. Generate multiple HOOKS first, then add a brief callback to the prior episode (1–2 lines max), no repetition.\n" +
+                    "Previous script:\n" +
+                    String(values.prevScriptText).slice(0, 10000);
+                }
+
+                // Also pass hooksCount through, if channel uses it
+                if (values.hooksCount) {
+                  prompt += `\n\nTarget number of alternate hooks: ${Math.max(1, Math.min(5, Number(values.hooksCount)))}.`;
+                }
+
+                setSending(true);
+
+                try {
+                  if (options.deepResearch) {
+                    // Use backend RAG (FastAPI) so DB + research can be combined server-side
+                    const res = await authedFetch<{ text: string; model?: string }>(`/research-generate/yt_script`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        niche: values.niche ?? "",
+                        topic: values.topic ?? "",
+                        audience: values.audience ?? "",
+                        durationMin: Number(values.durationMin ?? 4) || 4,
+                        tone:
+                          typeof values.tone === "string"
+                            ? values.tone
+                            : Array.isArray(values.tones)
+                            ? values.tones.join(" + ")
+                            : "",
+                        prompt: String(values.customPrompt ?? values.prompt ?? ""),
+                        deepResearch: true,
+                        prevScriptText: String(values.prevScriptText || ""),
+                        hooksCount: Number(values.hooksCount || 1),
+                      }),
+                    });
+
+                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+                      method: "POST",
+                      body: JSON.stringify({ content: prompt, role: "user" }),
+                    });
+                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+                      method: "POST",
+                      body: JSON.stringify({ content: res.text, role: "assistant" }),
+                    });
+
+                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+                    setMessages(normalizeMessages(rawList));
+                  } else {
+                    // Regular generation
+                    await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
+                      method: "POST",
+                      body: JSON.stringify({ content: prompt }),
+                    });
+                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+                    setMessages(normalizeMessages(rawList));
+                  }
+
+                  setSelectedKey(null);
+                  setLeftMode("chats");
+                  setTimeout(() => scrollRef.current?.scrollTo(0, 10 ** 9), 0);
+
+                  const raw = await authedFetch<any>(`${API_BASE}/chats`);
+                  setChats(normalizeChats(raw));
+                } catch (e: any) {
+                  setError(e.message || "Failed to generate");
+                } finally {
+                  setSending(false);
+                }
+              }}
             />
           ) : !activeId && !loading && messages.length === 0 ? (
             <WelcomeCanvas />
@@ -453,7 +528,8 @@ export default function AppHome() {
           )}
         </div>
 
-        {!selectedKey && (activeId || messages.length > 0) && (
+        {/* Composer */}
+        {!FormComp && (activeId || messages.length > 0) && (
           <div className="p-4 md:p-6 border-t border-white/10">
             <div className="max-w-4xl mx-auto flex gap-3">
               <textarea
@@ -483,6 +559,7 @@ export default function AppHome() {
           </div>
         )}
 
+        {/* floating paragraph edit UI */}
         {editUI.open && (
           <div
             className="fixed z-50 w-[min(640px,calc(100vw-32px))] p-3 rounded-xl border border-white/10 bg-[#0A0F1F] shadow-lg"
@@ -513,101 +590,13 @@ export default function AppHome() {
         )}
       </main>
 
+      {/* overlay */}
       {sending && <GeneratingOverlay label="Generating your script…" />}
     </div>
   );
 }
 
-function FormHost({
-  metaKey,
-  startNewChat,
-  setSending,
-  setError,
-  setSelectedKey,
-  setLeftMode,
-  setMessages,
-  setChats,
-  scrollRef,
-}: any) {
-  const meta = channelByKey[metaKey]!;
-  const FormComp = meta.Form!;
-  return (
-    <FormComp
-      onCancel={() => setSelectedKey(null)}
-      onGenerate={async (values: Record<string, any>, options: { deepResearch?: boolean } = {}) => {
-        const title =
-          (meta.buildTitle ? meta.buildTitle(values) : `${meta.label}: ${String(values.topic || "").slice(0, 80)}`) ||
-          meta.label;
-
-        const created = await startNewChat(title);
-        if (!created) return;
-
-        const prompt = meta.buildPrompt(values, options);
-        setSending(true);
-
-        try {
-          if (options.deepResearch) {
-            const body = {
-              niche: String(values.niche ?? ""),
-              topic: String(values.topic ?? ""),
-              audience: String(values.audience ?? ""),
-              durationMin: Number(values.durationMin ?? values.duration ?? values.minutes ?? 4) || 4,
-              tone:
-                typeof values.tone === "string"
-                  ? values.tone
-                  : Array.isArray(values.tones)
-                  ? values.tones.join(" + ")
-                  : "",
-              prompt: String(values.customPrompt ?? values.prompt ?? ""),
-              deepResearch: true,
-              hooksCount: Number(values.hooksCount ?? 1),
-            };
-
-            const res = await authedFetch<{ text: string; used_model?: string }>(
-              `${API_ROOT}/research-generate/yt_script`,
-              { method: "POST", body: JSON.stringify(body) }
-            );
-
-            await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-              method: "POST",
-              body: JSON.stringify({ content: prompt, role: "user" }),
-            });
-            await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-              method: "POST",
-              body: JSON.stringify({
-                content: res.text,
-                role: "assistant",
-                usedModel: res.used_model || undefined,
-              }),
-            });
-
-            const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-            setMessages(normalizeMessages(rawList));
-          } else {
-            await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
-              method: "POST",
-              body: JSON.stringify({ content: prompt }),
-            });
-            const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-            setMessages(normalizeMessages(rawList));
-          }
-
-          setSelectedKey(null);
-          setLeftMode("chats");
-          setTimeout(() => scrollRef.current?.scrollTo(0, 10 ** 9), 0);
-
-          const raw = await authedFetch<any>(`${API_BASE}/chats`);
-          setChats(normalizeChats(raw));
-        } catch (e: any) {
-          setError(e.message || "Failed to generate");
-        } finally {
-          setSending(false);
-        }
-      }}
-    />
-  );
-}
-
+/** ---------- UI bits ---------- */
 function Bubble({
   message,
   onContextMenu,
@@ -616,13 +605,22 @@ function Bubble({
   onContextMenu?: (e: React.MouseEvent, m: Message) => void;
 }) {
   const content = normalizeHeadingsAndBadges(message.content || "");
+  const badge = modelBadge(message.meta?.model);
   return (
     <div
       onContextMenu={(e) => onContextMenu?.(e, message)}
       className="max-w-3xl mx-auto rounded-2xl p-4 md:p-5 border bg-white/5 border-[#6C5CE7]/30"
     >
-      <div className="flex items-center gap-2 text-xs uppercase tracking-wider mb-2 text-gray-400">
-        CriptAi <ModelBadge model={message.usedModel} />
+      <div className="text-xs uppercase tracking-wider mb-2 text-gray-400 flex items-center gap-2">
+        CRIPTAI
+        {badge && (
+          <span
+            title={message.meta?.model || ""}
+            className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/10 border border-white/15 text-[10px] text-gray-300"
+          >
+            {badge}
+          </span>
+        )}
       </div>
       <div className={styles.proseWrap}>
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
@@ -667,22 +665,28 @@ function GeneratingOverlay({ label }: { label: string }) {
   );
 }
 
+/** ---------- auth-aware fetch ---------- */
 async function authedFetch<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const supabase = getSupabase();
   const {
     data: { session },
   } = (await supabase?.auth.getSession()) || { data: { session: null as any } };
 
+  // accept absolute backend routes ("/research-generate/yt_script") or API_BASE-relative
+  const finalUrl = url.startsWith("http") || url.startsWith("/") ? url : `${API_BASE}${url}`;
+
   const headers = new Headers(init.headers || {});
   headers.set("content-type", "application/json");
   if (session?.access_token) headers.set("authorization", `Bearer ${session.access_token}`);
 
-  const res = await fetch(url, { ...init, headers });
+  const res = await fetch(finalUrl, { ...init, headers });
   const text = await res.text();
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;
-  } catch {}
+  } catch {
+    // ignore
+  }
   if (!res.ok) throw new Error(json?.error || res.statusText);
   return (json as T) ?? ({} as T);
 }
