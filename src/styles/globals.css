@@ -1,0 +1,28 @@
+@import "./variables.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* your custom CSS below */
+
+/* your custom CSS after this */
+
+/* global styles */   
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{
+  margin:0;
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background: linear-gradient(135deg, var(--bg-dark), var(--bg-darker));
+  color: var(--text);
+}
+
+/* smooth scrolling + scrollbar */
+html{scroll-behavior:smooth}
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-track{background:var(--bg-dark)}
+::-webkit-scrollbar-thumb{background:var(--violet);border-radius:4px}
+/* hide numeric spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }

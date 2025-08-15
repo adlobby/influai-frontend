@@ -1,0 +1,25 @@
+[functions]
+  directory = "netlify/functions"
+
+# Proxy pretty API routes to functions
+[[redirects]]
+  from = "/api/chats"
+  to = "/.netlify/functions/chats"
+  status = 200
+
+[[redirects]]
+  from = "/api/chats/:id/messages"
+  to = "/.netlify/functions/messages?id=:id"
+  status = 200
+
+# netlify.toml
+[[redirects]]
+from = "/api/*"
+to = "/.netlify/functions/:splat"
+status = 200
+
+# SPA fallback (must be last)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

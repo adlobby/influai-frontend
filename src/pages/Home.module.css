@@ -1,0 +1,97 @@
+/* orbit rings */
+.ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+}
+.ringPrimary { border-color: rgba(108,92,231,.5); animation: spin 18s linear infinite; }
+.ringSecondary { width: 80%; height: 80%; margin: 10%; border-color: rgba(0,229,255,.5); animation: spinReverse 22s linear infinite; }
+
+.icon { position: absolute; filter: drop-shadow(0 0 6px rgba(108,92,231,.6)); transition: transform .25s ease; }
+.iconTop { top: 0; left: 50%; transform: translate(-50%,-50%); }
+.iconRight { top: 50%; right: 0; transform: translate(50%,-50%); }
+.iconBottom { bottom: 0; left: 50%; transform: translate(-50%,50%); }
+.iconLeft { top: 50%; left: 0; transform: translate(-50%,-50%); }
+.icon:hover { transform: translateZ(0) scale(1.06); }
+
+@keyframes spin { to { transform: rotate(360deg);} }
+@keyframes spinReverse { to { transform: rotate(-360deg);} }
+
+/* glass card utility */
+.glassCard {
+  background: rgba(255,255,255,0.05);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 4px 30px rgba(0,0,0,0.1);
+}
+
+/* shared hover effect (restored) */
+.cardHover {
+  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease, background .25s ease;
+}
+.cardHover:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 16px 40px rgba(0,0,0,.35), 0 0 0 1px rgba(108,92,231,.25) inset;
+  border-color: rgba(108,92,231,.5);
+}
+
+/* marquee */
+.marquee { animation: marqueeScroll 20s linear infinite; }
+@keyframes marqueeScroll { 0% { transform: translateX(0);} 100% { transform: translateX(-50%);} }
+
+/* Template media (unique “pictures”) */
+.templateMedia {
+  height: 12rem;
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.templateMedia::after{
+  content:"";
+  position:absolute; inset:0; opacity:.18;
+  background:radial-gradient(60% 80% at 50% 50%, rgba(255,255,255,.25), transparent 70%);
+  transition: opacity .25s ease;
+}
+.cardHover:hover .templateMedia::after{ opacity:.3; }
+
+/* Unique gradient variants */
+.tmLaunch{ background: linear-gradient(135deg,#6C5CE7,#FF2E63); }
+.tmWeekly{ background: linear-gradient(135deg,#00E5FF,#F9F871); }
+.tmFounder{ background: linear-gradient(135deg,#FF2E63,#F9F871); }
+.tmSale{   background: linear-gradient(135deg,#6C5CE7,#00E5FF); }
+.tmHowto{  background: linear-gradient(135deg,#22D3EE,#6C5CE7); }
+.tmTrend{  background: linear-gradient(135deg,#F9F871,#FF2E63); }
+/* restored mock window look */
+.mockWindow{
+  background:#0A0F1F;
+  border:1px solid rgba(108,92,231,.20);
+  border-radius:.5rem;
+  padding:.75rem;
+  position:relative;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+
+/* header dots */
+.dot{ width:.75rem; height:.75rem; border-radius:9999px; display:inline-block; opacity:.9; }
+
+/* skeleton bars with gentle shimmer */
+.skel{ position:relative; overflow:hidden; }
+.skel::after{
+  content:"";
+  position:absolute; inset:0;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent);
+  transform:translateX(-100%);
+  animation:shimmer 1.6s infinite;
+}
+@keyframes shimmer{ 100%{ transform:translateX(100%);} }
+
+/* chips under step 3 */
+.chip{
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(108,92,231,.25);
+  border-radius:.5rem;
+}
+
+/* (keeps your existing cardHover/glassCard/marquee/rings etc.) */

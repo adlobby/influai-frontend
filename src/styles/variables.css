@@ -1,0 +1,15 @@
+:root{
+  --bg-dark:#05060C;
+  --bg-darker:#0A0F1F;
+  --panel: rgba(255,255,255,.05);
+  --panel-border: rgba(255,255,255,.12);
+  --violet:#6C5CE7;
+  --aqua:#00E5FF;
+  --pink:#FF2E63;
+  --cyan:#22D3EE;
+  --yellow:#F9F871;
+  --muted:#98A2B3;
+  --font-display: "Space Grotesk", ui-sans-serif;
+}
+html,body,#root{ height:100%; background: linear-gradient(135deg, var(--bg-dark), var(--bg-darker)); color:#fff; }
+*{ box-sizing:border-box; }
