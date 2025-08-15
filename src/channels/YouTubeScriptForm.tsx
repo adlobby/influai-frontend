@@ -1,25 +1,21 @@
-// src/channels/YouTubeScriptForm.tsx
 import { useEffect, useMemo, useState } from "react";
 import type { ChannelFormProps } from "./types";
 
-const TONES = [
-  "Educational",
-  "Funny",
-  "Inspirational",
-  "Casual",
-  "Professional",
-] as const;
+const TONES = ["Educational", "Funny", "Inspirational", "Casual", "Professional"] as const;
 
 export type YtValues = {
-  niche: string;                 // required
-  topic?: string;                // optional
-  audience?: string;             // optional
-  durationMin?: number;          // typed number
-  tones?: string[];              // multi-select
-  prompt?: string;               // custom prompt (optional)
+  niche: string;
+  topic?: string;
+  audience?: string;
+  durationMin?: number;
+  tones?: string[];
+  prompt?: string;
+  /** how many distinct hooks to generate at the top of the script */
+  hooksCount?: number;
 };
 
 const LS_KEY = "yt.form.v1";
+const LS_DEEP = "yt.deepResearch";
 
 export default function YouTubeScriptForm({
   onCancel,
@@ -30,36 +26,58 @@ export default function YouTubeScriptForm({
       const saved = localStorage.getItem(LS_KEY);
       if (saved) return JSON.parse(saved);
     } catch {}
-    return { niche: "", topic: "", audience: "", durationMin: 4, tones: [], prompt: "" };
-  });
-  const [deepResearch, setDeepResearch] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("yt.deepResearch") === "1";
-    } catch { return false; }
+    return {
+      niche: "",
+      topic: "",
+      audience: "",
+      durationMin: 4,
+      tones: [],
+      prompt: "",
+      hooksCount: 1,
+    };
   });
 
+  const [deepResearch, setDeepResearch] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(LS_DEEP) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  // persist form + toggle
   useEffect(() => {
     localStorage.setItem(LS_KEY, JSON.stringify(v));
   }, [v]);
-
   useEffect(() => {
-    localStorage.setItem("yt.deepResearch", deepResearch ? "1" : "0");
+    localStorage.setItem(LS_DEEP, deepResearch ? "1" : "0");
   }, [deepResearch]);
 
   const canSubmit = useMemo(() => v.niche.trim().length > 0, [v.niche]);
 
   function toggleTone(t: string) {
     setV((s) => {
-      const set = new Set(s.tones ?? []);
-      set.has(t) ? set.delete(t) : set.add(t);
-      return { ...s, tones: Array.from(set) };
+      const curr = new Set(s.tones ?? []);
+      curr.has(t) ? curr.delete(t) : curr.add(t);
+      return { ...s, tones: Array.from(curr) };
     });
+  }
+
+  function clampHooks(n: number) {
+    if (!Number.isFinite(n)) return 1;
+    return Math.max(1, Math.min(5, Math.round(n)));
   }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
-    onGenerate(v, { deepResearch });
+    onGenerate(
+      {
+        ...v,
+        hooksCount: clampHooks(v.hooksCount ?? 1),
+      },
+      { deepResearch }
+    );
   }
 
   const inputCls =
@@ -69,9 +87,7 @@ export default function YouTubeScriptForm({
     <div className="max-w-4xl mx-auto p-4 md:p-6">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <div className="text-xs uppercase tracking-wider text-gray-400">
-            Channel
-          </div>
+          <div className="text-xs uppercase tracking-wider text-gray-400">Channel</div>
           <h2 className="text-2xl font-bold">YouTube Script</h2>
           <div className="text-sm text-gray-400">
             Fill the brief (topic is optional) and click <b>Start generating</b>.
@@ -79,7 +95,6 @@ export default function YouTubeScriptForm({
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Deep Research Toggle */}
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <span className="text-sm text-gray-300">Deep research</span>
             <span
@@ -108,7 +123,6 @@ export default function YouTubeScriptForm({
 
       <form onSubmit={submit} className="space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Niche (required) */}
           <label className="flex flex-col gap-2">
             <span className="text-sm text-gray-300">Niche *</span>
             <input
@@ -120,7 +134,6 @@ export default function YouTubeScriptForm({
             />
           </label>
 
-          {/* Topic / Brief (optional) */}
           <label className="flex flex-col gap-2 md:col-span-1">
             <span className="text-sm text-gray-300">Topic / Brief (optional)</span>
             <textarea
@@ -132,8 +145,7 @@ export default function YouTubeScriptForm({
             />
           </label>
 
-          {/* Audience (optional) */}
-          <label className="flex flex-col gap-2 md:col-span-1">
+          <label className="flex flex-col gap-2">
             <span className="text-sm text-gray-300">Audience (optional)</span>
             <input
               value={v.audience || ""}
@@ -143,27 +155,40 @@ export default function YouTubeScriptForm({
             />
           </label>
 
-          {/* Duration (typed) */}
           <label className="flex flex-col gap-2">
             <span className="text-sm text-gray-300">Approx. length (minutes)</span>
             <input
               inputMode="numeric"
               type="number"
               min={1}
-              step="1"
+              step={1}
               value={v.durationMin ?? 4}
               onChange={(e) =>
-                setV({ ...v, durationMin: Number(e.target.value || 0) })
+                setV({ ...v, durationMin: Math.max(1, Number(e.target.value || 1)) })
               }
               className={`${inputCls} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
             />
           </label>
 
-          {/* Tone (optional, multi-select) */}
-          <div className="flex flex-col gap-2 md:col-span-1">
-            <span className="text-sm text-gray-300">
-              Tone (optional) — pick one or more
+          <label className="flex flex-col gap-2">
+            <span className="text-sm text-gray-300">Number of Hooks</span>
+            <input
+              type="number"
+              min={1}
+              max={5}
+              value={v.hooksCount ?? 1}
+              onChange={(e) =>
+                setV((s) => ({ ...s, hooksCount: clampHooks(Number(e.target.value || 1)) }))
+              }
+              className={`${inputCls} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
+            />
+            <span className="text-xs text-gray-500">
+              Generate multiple punchy openings to A/B test (1–5).
             </span>
+          </label>
+
+          <div className="flex flex-col gap-2 md:col-span-1">
+            <span className="text-sm text-gray-300">Tone (optional) — pick one or more</span>
             <div className="flex flex-wrap gap-2">
               {TONES.map((t) => {
                 const on = (v.tones || []).includes(t);
@@ -186,7 +211,6 @@ export default function YouTubeScriptForm({
           </div>
         </div>
 
-        {/* Custom Prompt (optional) */}
         <label className="flex flex-col gap-2">
           <span className="text-sm text-gray-300">Custom Prompt (optional)</span>
           <textarea

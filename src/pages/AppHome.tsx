@@ -1,10 +1,13 @@
-// src/pages/AppHome.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import styles from "./AppHome.module.css";
+
 import { getSupabase } from "../lib/supabase-browser";
 import { channelList, channelByKey } from "../channels/registry";
 import type { TemplateKey } from "../channels/types";
 
-/** ---------- Chat types ---------- */
 type Chat = {
   _id: string;
   title: string;
@@ -19,30 +22,21 @@ type Message = {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt?: string;
+  usedModel?: string;
 };
 type LeftMode = "channels" | "chats";
 
-/** ---------- API bases ---------- */
-/** VITE_API_URL should point to FastAPI and include /api, e.g. http://localhost:7860/api */
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "/api";
-/** VITE_FUNCTIONS_BASE points to Netlify functions, e.g. "/.netlify/functions" in dev */
-const FUNCTIONS_BASE =
-  (import.meta.env.VITE_FUNCTIONS_BASE as string) || "/.netlify/functions";
+const API_ROOT = API_BASE.replace(/\/api\/?$/, "");
 
-/** ---------- UI helpers ---------- */
-const ICON_BADGE =
-  "shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-md bg-white/5 border border-white/10 text-white/80";
-
-/** ---------- LocalStorage keys ---------- */
 const LS_SELECTED = "ui.selectedChannel";
 const LS_LEFTMODE = "ui.leftMode";
 const LS_ACTIVE_CHAT = "chat.activeId";
 
-/** ---------- Normalizers (map API -> local shapes) ---------- */
 function toLocalChat(input: any): Chat {
   if (!input) return { _id: "", title: "" };
   return {
-    _id: input._id || input.id, // backend returns `id`
+    _id: input._id || input.id,
     title: input.title,
     userId: input.userId,
     createdAt: input.createdAt,
@@ -57,6 +51,7 @@ function toLocalMessage(input: any): Message {
     role: input.role,
     content: input.content,
     createdAt: input.createdAt,
+    usedModel: input.usedModel || input.used_model,
   };
 }
 function normalizeChats(data: any): Chat[] {
@@ -64,14 +59,40 @@ function normalizeChats(data: any): Chat[] {
   return arr.map(toLocalChat);
 }
 function normalizeMessages(data: any): Message[] {
-  // Accept a list or a single message (POST returns a single)
   if (Array.isArray(data)) return data.map(toLocalMessage);
   if (Array.isArray(data?.data)) return data.data.map(toLocalMessage);
   if (data && (data.id || data._id)) return [toLocalMessage(data)];
   return [];
 }
 
-/** ---------- Page ---------- */
+function normalizeHeadingsAndBadges(text: string) {
+  let t = (text || "")
+    .replace(/^###\s*H1:\s*/gm, "# ")
+    .replace(/^###\s*H2:\s*/gm, "## ")
+    .replace(/^H1:\s*/gm, "# ")
+    .replace(/^H2:\s*/gm, "## ")
+    .replace(/^\s*---\s*$/gm, "\n");
+  t = t.replace(/\[(\d{1,2}:\d{2})]/g, (_m, mm) => `<span class="ts">[${mm}]</span>`);
+  return t;
+}
+
+function ModelBadge({ model }: { model?: string }) {
+  if (!model) return null;
+  const m = (model || "").toLowerCase();
+  const isZai = m.includes("zai");
+  const isMistral = m.includes("mistral");
+  const letter = isZai ? "z" : isMistral ? "M" : "?";
+  return (
+    <span
+      title={model}
+      className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-white/20 text-[10px] font-bold leading-none bg-[#6C5CE7] text-white/95"
+      style={{ transform: "translateY(-0.5px)" }}
+    >
+      {letter}
+    </span>
+  );
+}
+
 export default function AppHome() {
   const supabase = getSupabase();
   const [loading, setLoading] = useState(true);
@@ -95,7 +116,6 @@ export default function AppHome() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // ----- selection editing state -----
   const [editUI, setEditUI] = useState<{
     open: boolean;
     x: number;
@@ -105,7 +125,6 @@ export default function AppHome() {
     instruction?: string;
   }>({ open: false, x: 0, y: 0 });
 
-  // load user email
   useEffect(() => {
     (async () => {
       const ses = await supabase?.auth.getSession();
@@ -114,7 +133,6 @@ export default function AppHome() {
     })();
   }, [supabase]);
 
-  // persist UI state
   useEffect(() => {
     selectedKey
       ? localStorage.setItem(LS_SELECTED, selectedKey)
@@ -129,13 +147,12 @@ export default function AppHome() {
       : localStorage.removeItem(LS_ACTIVE_CHAT);
   }, [activeId]);
 
-  // fetch chats on mount
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
         setError(null);
-        let listRaw = await authedFetch<any>(`${API_BASE}/chats`);
+        const listRaw = await authedFetch<any>(`${API_BASE}/chats`);
         const list = normalizeChats(listRaw);
         setChats(list);
         if (!activeId && list.length) setActiveId(list[0]._id);
@@ -145,10 +162,8 @@ export default function AppHome() {
         setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // fetch messages when active chat changes
   useEffect(() => {
     if (!activeId) return;
     (async () => {
@@ -166,7 +181,7 @@ export default function AppHome() {
 
   function pickChannel(key: TemplateKey) {
     setSelectedKey(key);
-    setLeftMode("chats");
+    setLeftMode("channels");
   }
 
   async function startNewChat(customTitle?: string) {
@@ -191,25 +206,27 @@ export default function AppHome() {
   async function deleteChat(id: string) {
     if (!confirm("Delete this chat?")) return;
     try {
-      // implement your DELETE endpoint accordingly; placeholder keeps UI consistent
+      // Try path style first
+      await authedFetch(`${API_BASE}/chats/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    } catch {
+      // Fallback to query style (older backends)
       await authedFetch(`${API_BASE}/chats?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
-      setChats((prev) => {
-        const updated = prev.filter((x) => x._id !== id);
-        if (activeId === id) {
-          const next = updated[0];
-          setActiveId(next ? next._id : null);
-          setMessages([]);
-        }
-        return updated;
-      });
-    } catch (e: any) {
-      setError(e.message || "Failed to delete chat");
     }
+    setChats((prev) => {
+      const updated = prev.filter((x) => x._id !== id);
+      if (activeId === id) {
+        const next = updated[0];
+        setActiveId(next ? next._id : null);
+        setMessages([]);
+      }
+      return updated;
+    });
   }
 
-  // plain chat composer send
   async function send() {
     if (!activeId) {
       const created = await startNewChat();
@@ -221,15 +238,6 @@ export default function AppHome() {
     const content = draft.trim();
     if (!content) return;
 
-    const optimistic: Message = {
-      _id: "tmp_" + Date.now(),
-      chatId,
-      userId: "me",
-      role: "user",
-      content,
-      createdAt: new Date().toISOString(),
-    };
-    setMessages((m) => [...m, optimistic]);
     setDraft("");
     setSending(true);
 
@@ -238,7 +246,6 @@ export default function AppHome() {
         method: "POST",
         body: JSON.stringify({ content }),
       });
-      // refresh full list (POST returns a single message)
       const rawList = await authedFetch<any>(`${API_BASE}/chats/${chatId}/messages`);
       setMessages(normalizeMessages(rawList));
       setTimeout(() => scrollRef.current?.scrollTo(0, 10 ** 9), 0);
@@ -247,7 +254,6 @@ export default function AppHome() {
       setChats(normalizeChats(rawChats));
       setActiveId(chatId);
     } catch (e: any) {
-      setMessages((m) => m.filter((x) => x._id !== optimistic._id));
       setError(e.message || "Failed to send");
     } finally {
       setSending(false);
@@ -267,7 +273,6 @@ export default function AppHome() {
   const meta = selectedKey ? channelByKey[selectedKey] : null;
   const FormComp = meta?.Form;
 
-  // ----- right-click regenerate (assistant only) -----
   function onBubbleContextMenu(e: React.MouseEvent, message: Message) {
     if (message.role !== "assistant") return;
     const selection = window.getSelection()?.toString() || "";
@@ -291,18 +296,21 @@ export default function AppHome() {
     try {
       const msg = messages.find((m) => m._id === editUI.messageId);
       if (!msg) return;
-      const res = await authedFetch<{ rewritten: string }>(
-        `${FUNCTIONS_BASE}/edits-paragraph`,
+
+      const res = await authedFetch<{ text: string; used_model?: string }>(
+        `${API_ROOT}/edit-paragraph`,
         {
           method: "POST",
           body: JSON.stringify({
-            selected: editUI.selected,
+            paragraph: editUI.selected,
             instruction: editUI.instruction,
-            fullText: msg.content,
+            full_context: msg.content,
           }),
         }
       );
-      const updated = (msg.content || "").replace(editUI.selected, res.rewritten);
+
+      const rewritten = (res as any).text || editUI.selected!;
+      const updated = (msg.content || "").replace(editUI.selected!, rewritten);
       setMessages((arr) => arr.map((m) => (m._id === msg._id ? { ...m, content: updated } : m)));
       setEditUI((s) => ({ ...s, open: false }));
     } catch (e: any) {
@@ -312,9 +320,9 @@ export default function AppHome() {
   }
 
   return (
-    <div className="min-h-screen flex bg-gradient-to-br from-[#05060C] to-[#0A0F1F] text-white">
+    <div className="h-screen overflow-hidden flex bg-gradient-to-br from-[#05060C] to-[#0A0F1F] text-white">
       {/* Sidebar */}
-      <aside className="w-72 border-r border-white/10 p-4 hidden md:flex flex-col">
+      <aside className="w-72 h-full border-r border-white/10 p-4 hidden md:flex flex-col overflow-y-auto">
         <div className="mb-4">
           <div className="flex items-center justify-between">
             <div className="font-semibold">
@@ -347,7 +355,7 @@ export default function AppHome() {
                 title={t.hint}
               >
                 <div className="flex items-start gap-3">
-                  <span className={ICON_BADGE}>
+                  <span className="shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-md bg-white/5 border border-white/10 text-white/80">
                     <t.Icon className="w-4 h-4" />
                   </span>
                   <div>
@@ -403,7 +411,7 @@ export default function AppHome() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 flex flex-col">
+      <main className="flex-1 h-full min-h-0 flex flex-col">
         <header className="md:hidden p-3 border-b border-white/10 flex items-center gap-2">
           <button
             onClick={() => {
@@ -417,79 +425,35 @@ export default function AppHome() {
           <div className="font-semibold truncate">{activeChat ? activeChat.title : "CriptAi"}</div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8">
-          {FormComp && meta ? (
-            <FormComp
-              onCancel={() => setSelectedKey(null)}
-              onGenerate={async (values: Record<string, any>, options: { deepResearch?: boolean } = {}) => {
-                const title =
-                  (meta.buildTitle ? meta.buildTitle(values) : `${meta.label}: ${String(values.topic || "").slice(0, 80)}`) ||
-                  meta.label;
-
-                const created = await startNewChat(title);
-                if (!created) return;
-
-                const prompt = meta.buildPrompt(values, options);
-                setSending(true);
-
-                try {
-                  if (options.deepResearch) {
-                    // call Netlify function (functions base)
-                    const res = await authedFetch<{ content: string }>(`${FUNCTIONS_BASE}/research-generate`, {
-                      method: "POST",
-                      body: JSON.stringify({ channel: meta.key, values }),
-                    });
-
-                    // store a "user" prompt then the "assistant" output
-                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-                      method: "POST",
-                      body: JSON.stringify({ content: prompt, role: "user" }),
-                    });
-                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-                      method: "POST",
-                      body: JSON.stringify({ content: res.content, role: "assistant" }),
-                    });
-
-                    // refresh list
-                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-                    setMessages(normalizeMessages(rawList));
-                  } else {
-                    // normal: just post user message, backend may add assistant later (or you can add it client-side)
-                    await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
-                      method: "POST",
-                      body: JSON.stringify({ content: prompt }),
-                    });
-                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-                    setMessages(normalizeMessages(rawList));
-                  }
-
-                  setSelectedKey(null);
-                  setLeftMode("chats");
-                  setTimeout(() => scrollRef.current?.scrollTo(0, 10 ** 9), 0);
-
-                  const raw = await authedFetch<any>(`${API_BASE}/chats`);
-                  setChats(normalizeChats(raw));
-                } catch (e: any) {
-                  setError(e.message || "Failed to generate");
-                } finally {
-                  setSending(false);
-                }
-              }}
+        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 md:p-8">
+          {selectedKey && channelByKey[selectedKey]?.Form ? (
+            <FormHost
+              key={selectedKey}
+              metaKey={selectedKey}
+              startNewChat={startNewChat}
+              setSending={setSending}
+              setError={setError}
+              setSelectedKey={setSelectedKey}
+              setLeftMode={setLeftMode}
+              setMessages={setMessages}
+              setChats={setChats}
+              scrollRef={scrollRef}
             />
           ) : !activeId && !loading && messages.length === 0 ? (
             <WelcomeCanvas />
           ) : (
             <div className="space-y-4">
-              {messages.map((m) => (
-                <Bubble key={m._id} message={m} onContextMenu={onBubbleContextMenu} />
-              ))}
+              {messages
+                .filter((m) => m.role === "assistant")
+                .map((m) => (
+                  <Bubble key={m._id} message={m} onContextMenu={onBubbleContextMenu} />
+                ))}
               {error && <div className="text-red-400 text-sm bg-white/5 p-3 rounded-lg">{error}</div>}
             </div>
           )}
         </div>
 
-        {/* Chat composer */}
-        {!FormComp && (activeId || messages.length > 0) && (
+        {!selectedKey && (activeId || messages.length > 0) && (
           <div className="p-4 md:p-6 border-t border-white/10">
             <div className="max-w-4xl mx-auto flex gap-3">
               <textarea
@@ -519,7 +483,6 @@ export default function AppHome() {
           </div>
         )}
 
-        {/* floating paragraph edit UI */}
         {editUI.open && (
           <div
             className="fixed z-50 w-[min(640px,calc(100vw-32px))] p-3 rounded-xl border border-white/10 bg-[#0A0F1F] shadow-lg"
@@ -549,11 +512,102 @@ export default function AppHome() {
           </div>
         )}
       </main>
+
+      {sending && <GeneratingOverlay label="Generating your script…" />}
     </div>
   );
 }
 
-/** ---------- UI bits ---------- */
+function FormHost({
+  metaKey,
+  startNewChat,
+  setSending,
+  setError,
+  setSelectedKey,
+  setLeftMode,
+  setMessages,
+  setChats,
+  scrollRef,
+}: any) {
+  const meta = channelByKey[metaKey]!;
+  const FormComp = meta.Form!;
+  return (
+    <FormComp
+      onCancel={() => setSelectedKey(null)}
+      onGenerate={async (values: Record<string, any>, options: { deepResearch?: boolean } = {}) => {
+        const title =
+          (meta.buildTitle ? meta.buildTitle(values) : `${meta.label}: ${String(values.topic || "").slice(0, 80)}`) ||
+          meta.label;
+
+        const created = await startNewChat(title);
+        if (!created) return;
+
+        const prompt = meta.buildPrompt(values, options);
+        setSending(true);
+
+        try {
+          if (options.deepResearch) {
+            const body = {
+              niche: String(values.niche ?? ""),
+              topic: String(values.topic ?? ""),
+              audience: String(values.audience ?? ""),
+              durationMin: Number(values.durationMin ?? values.duration ?? values.minutes ?? 4) || 4,
+              tone:
+                typeof values.tone === "string"
+                  ? values.tone
+                  : Array.isArray(values.tones)
+                  ? values.tones.join(" + ")
+                  : "",
+              prompt: String(values.customPrompt ?? values.prompt ?? ""),
+              deepResearch: true,
+              hooksCount: Number(values.hooksCount ?? 1),
+            };
+
+            const res = await authedFetch<{ text: string; used_model?: string }>(
+              `${API_ROOT}/research-generate/yt_script`,
+              { method: "POST", body: JSON.stringify(body) }
+            );
+
+            await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+              method: "POST",
+              body: JSON.stringify({ content: prompt, role: "user" }),
+            });
+            await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+              method: "POST",
+              body: JSON.stringify({
+                content: res.text,
+                role: "assistant",
+                usedModel: res.used_model || undefined,
+              }),
+            });
+
+            const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+            setMessages(normalizeMessages(rawList));
+          } else {
+            await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
+              method: "POST",
+              body: JSON.stringify({ content: prompt }),
+            });
+            const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+            setMessages(normalizeMessages(rawList));
+          }
+
+          setSelectedKey(null);
+          setLeftMode("chats");
+          setTimeout(() => scrollRef.current?.scrollTo(0, 10 ** 9), 0);
+
+          const raw = await authedFetch<any>(`${API_BASE}/chats`);
+          setChats(normalizeChats(raw));
+        } catch (e: any) {
+          setError(e.message || "Failed to generate");
+        } finally {
+          setSending(false);
+        }
+      }}
+    />
+  );
+}
+
 function Bubble({
   message,
   onContextMenu,
@@ -561,18 +615,20 @@ function Bubble({
   message: Message;
   onContextMenu?: (e: React.MouseEvent, m: Message) => void;
 }) {
-  const isUser = message.role === "user";
+  const content = normalizeHeadingsAndBadges(message.content || "");
   return (
     <div
       onContextMenu={(e) => onContextMenu?.(e, message)}
-      className={`max-w-3xl mx-auto rounded-2xl p-4 md:p-5 border whitespace-pre-wrap ${
-        isUser ? "bg-[#0A0F1F] border-white/10" : "bg-white/5 border-[#6C5CE7]/30"
-      }`}
+      className="max-w-3xl mx-auto rounded-2xl p-4 md:p-5 border bg-white/5 border-[#6C5CE7]/30"
     >
-      <div className="text-xs uppercase tracking-wider mb-2 text-gray-400">
-        {isUser ? "You" : message.role === "assistant" ? "CriptAi" : "System"}
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wider mb-2 text-gray-400">
+        CriptAi <ModelBadge model={message.usedModel} />
       </div>
-      <div className="leading-relaxed">{message.content}</div>
+      <div className={styles.proseWrap}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+          {content}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }
@@ -595,7 +651,22 @@ function WelcomeCanvas() {
   );
 }
 
-/** ---------- auth-aware fetch ---------- */
+function GeneratingOverlay({ label }: { label: string }) {
+  const tiles = new Array(24).fill(0);
+  return (
+    <div className={styles.genOverlay}>
+      <div className="flex flex-col items-center">
+        <div className={styles.grid}>
+          {tiles.map((_, i) => (
+            <div key={i} className={`${styles.tile} ${i % 3 === 0 ? styles.tileDim : ""}`} />
+          ))}
+        </div>
+        <div className={styles.genText}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
 async function authedFetch<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const supabase = getSupabase();
   const {
@@ -611,9 +682,7 @@ async function authedFetch<T = any>(url: string, init: RequestInit = {}): Promis
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;
-  } catch {
-    // ignore
-  }
+  } catch {}
   if (!res.ok) throw new Error(json?.error || res.statusText);
   return (json as T) ?? ({} as T);
 }

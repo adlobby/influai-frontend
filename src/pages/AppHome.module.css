@@ -1,3 +1,117 @@
 .wrap{
   max-width:960px; margin:100px auto 40px; padding:24px;
 }
+/* --- Pretty prose for assistant output --- */
+.proseWrap :where(h1) {
+  font-size: 1.5rem;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  margin-top: .25rem;
+  margin-bottom: .75rem;
+  background: linear-gradient(90deg,#6C5CE7, #00E5FF);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.proseWrap :where(h2) {
+  font-size: 1.125rem;
+  line-height: 1.35;
+  font-weight: 700;
+  margin: 1rem 0 .5rem;
+  color: #e9eefc;
+}
+.proseWrap :where(h3) {
+  font-size: 1rem;
+  line-height: 1.35;
+  font-weight: 700;
+  margin: .75rem 0 .25rem;
+  color: #cbd5ff;
+}
+.proseWrap :where(p) {
+  color: #dbe0ef;
+  line-height: 1.75;
+  margin: .5rem 0;
+}
+.proseWrap :where(ul) { margin: .5rem 0 .75rem 1.25rem; }
+.proseWrap :where(li) { margin: .25rem 0; }
+
+/* Timestamp-style inline badges like [0:15] */
+.proseWrap .ts {
+  display: inline-block;
+  padding: .05rem .4rem;
+  margin: 0 .15rem;
+  border-radius: .4rem;
+  font-size: .8em;
+  background: rgba(108,92,231,.18);
+  border: 1px solid rgba(108,92,231,.35);
+  color: #dfe4ff;
+}
+
+/* --- Fullscreen “moving boxes” loader --- */
+.genOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  backdrop-filter: blur(6px);
+  background: rgba(5,6,12,.65);
+  display: grid;
+  place-items: center;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(8, 18px);
+  gap: 12px;
+}
+.tile {
+  width: 16px;
+  height: 16px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #6C5CE7, #00E5FF);
+  opacity: .85;
+  animation: float 2.4s ease-in-out infinite;
+  box-shadow: 0 0 14px rgba(0,229,255,.25);
+}
+.tileDim {
+  filter: brightness(.7);
+  opacity: .55;
+}
+@keyframes float {
+  0%,100% { transform: translateY(0) }
+  50%     { transform: translateY(-10px) }
+}
+
+/* Stagger all 24 tiles a bit */
+.tile:nth-child(1)  { animation-delay: 0ms }
+.tile:nth-child(2)  { animation-delay: 80ms }
+.tile:nth-child(3)  { animation-delay: 160ms }
+.tile:nth-child(4)  { animation-delay: 240ms }
+.tile:nth-child(5)  { animation-delay: 320ms }
+.tile:nth-child(6)  { animation-delay: 400ms }
+.tile:nth-child(7)  { animation-delay: 480ms }
+.tile:nth-child(8)  { animation-delay: 560ms }
+.tile:nth-child(9)  { animation-delay: 120ms }
+.tile:nth-child(10) { animation-delay: 200ms }
+.tile:nth-child(11) { animation-delay: 280ms }
+.tile:nth-child(12) { animation-delay: 360ms }
+.tile:nth-child(13) { animation-delay: 440ms }
+.tile:nth-child(14) { animation-delay: 520ms }
+.tile:nth-child(15) { animation-delay: 600ms }
+.tile:nth-child(16) { animation-delay: 680ms }
+.tile:nth-child(17) { animation-delay: 240ms }
+.tile:nth-child(18) { animation-delay: 320ms }
+.tile:nth-child(19) { animation-delay: 400ms }
+.tile:nth-child(20) { animation-delay: 480ms }
+.tile:nth-child(21) { animation-delay: 560ms }
+.tile:nth-child(22) { animation-delay: 640ms }
+.tile:nth-child(23) { animation-delay: 720ms }
+.tile:nth-child(24) { animation-delay: 800ms }
+
+.genText {
+  margin-top: 18px;
+  font-weight: 600;
+  color: #dfe7ff;
+  text-shadow: 0 2px 12px rgba(0,229,255,.18);
+  letter-spacing: .02em;
+}
