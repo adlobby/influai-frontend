@@ -9,13 +9,7 @@ import { channelList, channelByKey } from "../channels/registry";
 import type { TemplateKey } from "../channels/types";
 
 /** ---------- Chat types ---------- */
-type Chat = {
-  _id: string;
-  title: string;
-  userId?: string;
-  createdAt?: string;
-  updatedAt?: string;
-};
+type Chat = { _id: string; title: string; userId?: string; createdAt?: string; updatedAt?: string };
 type Message = {
   _id: string;
   chatId: string;
@@ -23,12 +17,13 @@ type Message = {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt?: string;
-  meta?: { model?: string };
+  usedModel?: string | null;
 };
 type LeftMode = "channels" | "chats";
 
-/** API bases */
+/** API base */
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "/api";
+const API_ROOT = API_BASE.replace(/\/api\/?$/, "");
 
 /** ---------- LocalStorage keys ---------- */
 const LS_SELECTED = "ui.selectedChannel";
@@ -38,13 +33,7 @@ const LS_ACTIVE_CHAT = "chat.activeId";
 /** ---------- Normalizers ---------- */
 function toLocalChat(input: any): Chat {
   if (!input) return { _id: "", title: "" };
-  return {
-    _id: input._id || input.id,
-    title: input.title,
-    userId: input.userId,
-    createdAt: input.createdAt,
-    updatedAt: input.updatedAt,
-  };
+  return { _id: input._id || input.id, title: input.title, userId: input.userId, createdAt: input.createdAt, updatedAt: input.updatedAt };
 }
 function toLocalMessage(input: any): Message {
   return {
@@ -54,7 +43,7 @@ function toLocalMessage(input: any): Message {
     role: input.role,
     content: input.content,
     createdAt: input.createdAt,
-    meta: input.meta,
+    usedModel: input.usedModel,
   };
 }
 function normalizeChats(data: any): Chat[] {
@@ -79,13 +68,12 @@ function normalizeHeadingsAndBadges(text: string) {
   t = t.replace(/\[(\d{1,2}:\d{2})]/g, (_m, mm) => `<span class="ts">[${mm}]</span>`);
   return t;
 }
-
-function modelBadge(model?: string): "Z" | "M" | null {
+function modelBadge(model?: string | null) {
   if (!model) return null;
   const m = model.toLowerCase();
-  if (m.includes("zai")) return "Z";
   if (m.includes("mistral") || m.includes("mixtral")) return "M";
-  return null;
+  if (m.includes("glm") || m.includes("zai") || m.includes("fireworks")) return "z";
+  return "·";
 }
 
 /** ---------- Page ---------- */
@@ -97,30 +85,17 @@ export default function AppHome() {
 
   const [userEmail, setUserEmail] = useState<string>("");
   const [chats, setChats] = useState<Chat[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(() =>
-    localStorage.getItem(LS_ACTIVE_CHAT)
-  );
+  const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem(LS_ACTIVE_CHAT));
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
 
-  const [leftMode, setLeftMode] = useState<LeftMode>(
-    () => (localStorage.getItem(LS_LEFTMODE) as LeftMode) || "channels"
-  );
-  const [selectedKey, setSelectedKey] = useState<TemplateKey | null>(
-    () => (localStorage.getItem(LS_SELECTED) as TemplateKey) || null
-  );
+  const [leftMode, setLeftMode] = useState<LeftMode>(() => (localStorage.getItem(LS_LEFTMODE) as LeftMode) || "channels");
+  const [selectedKey, setSelectedKey] = useState<TemplateKey | null>(() => (localStorage.getItem(LS_SELECTED) as TemplateKey) || null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // selection edit
-  const [editUI, setEditUI] = useState<{
-    open: boolean;
-    x: number;
-    y: number;
-    messageId?: string;
-    selected?: string;
-    instruction?: string;
-  }>({ open: false, x: 0, y: 0 });
+  // selection edit UI
+  const [editUI, setEditUI] = useState<{ open: boolean; x: number; y: number; messageId?: string; selected?: string; instruction?: string; }>({ open: false, x: 0, y: 0 });
 
   // load user email
   useEffect(() => {
@@ -133,17 +108,11 @@ export default function AppHome() {
 
   // persist UI state
   useEffect(() => {
-    selectedKey
-      ? localStorage.setItem(LS_SELECTED, selectedKey)
-      : localStorage.removeItem(LS_SELECTED);
+    selectedKey ? localStorage.setItem(LS_SELECTED, selectedKey) : localStorage.removeItem(LS_SELECTED);
   }, [selectedKey]);
+  useEffect(() => { localStorage.setItem(LS_LEFTMODE, leftMode); }, [leftMode]);
   useEffect(() => {
-    localStorage.setItem(LS_LEFTMODE, leftMode);
-  }, [leftMode]);
-  useEffect(() => {
-    activeId
-      ? localStorage.setItem(LS_ACTIVE_CHAT, activeId)
-      : localStorage.removeItem(LS_ACTIVE_CHAT);
+    activeId ? localStorage.setItem(LS_ACTIVE_CHAT, activeId) : localStorage.removeItem(LS_ACTIVE_CHAT);
   }, [activeId]);
 
   // fetch chats on mount
@@ -189,10 +158,7 @@ export default function AppHome() {
   async function startNewChat(customTitle?: string) {
     try {
       setError(null);
-      const createdRaw = await authedFetch<any>(`${API_BASE}/chats`, {
-        method: "POST",
-        body: JSON.stringify({ title: customTitle || "New chat" }),
-      });
+      const createdRaw = await authedFetch<any>(`${API_BASE}/chats`, { method: "POST", body: JSON.stringify({ title: customTitle || "New chat" }) });
       const created = toLocalChat(createdRaw);
       if (!created._id) throw new Error("Chat create failed: missing id");
       setChats((c) => [created, ...c]);
@@ -208,9 +174,8 @@ export default function AppHome() {
   async function deleteChat(id: string) {
     if (!confirm("Delete this chat?")) return;
     try {
-      await authedFetch(`${API_BASE}/chats?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+      // path version (works across hosts)
+      await authedFetch(`${API_BASE}/chats/${encodeURIComponent(id)}`, { method: "DELETE" });
       setChats((prev) => {
         const updated = prev.filter((x) => x._id !== id);
         if (activeId === id) {
@@ -241,10 +206,7 @@ export default function AppHome() {
     setSending(true);
 
     try {
-      await authedFetch<any>(`${API_BASE}/chats/${chatId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      });
+      await authedFetch<any>(`${API_BASE}/chats/${chatId}/messages`, { method: "POST", body: JSON.stringify({ content }) });
       const rawList = await authedFetch<any>(`${API_BASE}/chats/${chatId}/messages`);
       setMessages(normalizeMessages(rawList));
       setTimeout(() => scrollRef.current?.scrollTo(0, 10 ** 9), 0);
@@ -264,10 +226,7 @@ export default function AppHome() {
     window.location.href = "/auth";
   }
 
-  const activeChat = useMemo(
-    () => (Array.isArray(chats) ? chats.find((c) => c._id === activeId) || null : null),
-    [chats, activeId]
-  );
+  const activeChat = useMemo(() => (Array.isArray(chats) ? chats.find((c) => c._id === activeId) || null : null), [chats, activeId]);
 
   const meta = selectedKey ? channelByKey[selectedKey] : null;
   const FormComp = meta?.Form;
@@ -278,14 +237,7 @@ export default function AppHome() {
     const selection = window.getSelection()?.toString() || "";
     if (!selection.trim()) return;
     e.preventDefault();
-    setEditUI({
-      open: true,
-      x: e.clientX,
-      y: e.clientY - 8,
-      messageId: message._id,
-      selected: selection,
-      instruction: "",
-    });
+    setEditUI({ open: true, x: e.clientX, y: e.clientY - 8, messageId: message._id, selected: selection, instruction: "" });
   }
 
   async function runParagraphEdit() {
@@ -297,13 +249,9 @@ export default function AppHome() {
       const msg = messages.find((m) => m._id === editUI.messageId);
       if (!msg) return;
 
-      const res = await authedFetch<{ text: string; model?: string }>(`${API_BASE}/edit-paragraph`, {
+      const res = await authedFetch<{ text: string; used_model?: string }>(`${API_ROOT}/edit-paragraph`, {
         method: "POST",
-        body: JSON.stringify({
-          paragraph: editUI.selected,
-          instruction: editUI.instruction,
-          full_context: msg.content,
-        }),
+        body: JSON.stringify({ paragraph: editUI.selected, instruction: editUI.instruction, full_context: msg.content }),
       });
 
       const rewritten = (res.text || "").trim() || editUI.selected!;
@@ -326,13 +274,7 @@ export default function AppHome() {
               <span className="bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] bg-clip-text text-transparent">CriptAi</span>{" "}
               <span className="text-gray-300">by AdLobby</span>
             </div>
-            <button
-              onClick={() => {
-                setSelectedKey(null);
-                setLeftMode("channels");
-              }}
-              className="px-3 py-1 text-sm rounded-lg bg-white/10 hover:bg-white/15"
-            >
+            <button onClick={() => { setSelectedKey(null); setLeftMode("channels"); }} className="px-3 py-1 text-sm rounded-lg bg-white/10 hover:bg-white/15">
               + New
             </button>
           </div>
@@ -345,12 +287,7 @@ export default function AppHome() {
         {leftMode === "channels" ? (
           <div className="flex flex-col gap-2 overflow-y-auto">
             {channelList.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => pickChannel(t.key)}
-                className="w-full text-left px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10"
-                title={t.hint}
-              >
+              <button key={t.key} onClick={() => pickChannel(t.key)} className="w-full text-left px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10" title={t.hint}>
                 <div className="flex items-start gap-3">
                   <span className="shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-md bg-white/5 border border-white/10 text-white/80">
                     <t.Icon className="w-4 h-4" />
@@ -364,62 +301,35 @@ export default function AppHome() {
             ))}
           </div>
         ) : (
-          <div className="overflow-y-auto space-y-1">
-            {/* tiny hint */}
-            <div className="text-[10px] text-gray-500 mb-1 px-1">delete the chats you dont need</div>
-
-            {loading &&
-              Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="h-10 bg-white/5 rounded-lg animate-pulse" />
-              ))}
-
-            {!loading && chats.length === 0 && <p className="text-sm text-gray-400">No chats yet.</p>}
-
-            {chats.map((c) => (
-              <button
-                key={c._id}
-                onClick={() => {
-                  setSelectedKey(null);
-                  setActiveId(c._id);
-                }}
-                className={`w-full text-left px-3 py-2 rounded-lg flex items-center justify-between ${
-                  c._id === activeId ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
-                }`}
-              >
-                <span className="truncate">{c.title || "Untitled chat"}</span>
-                <span
-                  className="text-gray-400 hover:text-red-400 px-1"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteChat(c._id);
-                  }}
-                  title="Delete chat"
+          <>
+            <div className="text-[10px] text-gray-500 mb-2">delete the chats you don’t need</div>
+            <div className="overflow-y-auto space-y-1">
+              {loading && Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-10 bg-white/5 rounded-lg animate-pulse" />)}
+              {!loading && chats.length === 0 && <p className="text-sm text-gray-400">No chats yet.</p>}
+              {chats.map((c) => (
+                <button
+                  key={c._id}
+                  onClick={() => { setSelectedKey(null); setActiveId(c._id); }}
+                  className={`w-full text-left px-3 py-2 rounded-lg flex items-center justify-between ${c._id === activeId ? "bg-white/15" : "bg-white/5 hover:bg-white/10"}`}
                 >
-                  ✕
-                </span>
-              </button>
-            ))}
-          </div>
+                  <span className="truncate">{c.title || "Untitled chat"}</span>
+                  <span className="text-gray-400 hover:text-red-400 px-1" onClick={(e) => { e.stopPropagation(); deleteChat(c._id); }} title="Delete chat">✕</span>
+                </button>
+              ))}
+            </div>
+          </>
         )}
 
         <div className="mt-auto pt-4 border-t border-white/10 text-sm text-gray-300">
           <div className="truncate">{userEmail}</div>
-          <button className="mt-2 w-full px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10" onClick={signOut}>
-            Sign out
-          </button>
+          <button className="mt-2 w-full px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10" onClick={signOut}>Sign out</button>
         </div>
       </aside>
 
       {/* Main */}
       <main className="flex-1 h-full min-h-0 flex flex-col">
         <header className="md:hidden p-3 border-b border-white/10 flex items-center gap-2">
-          <button
-            onClick={() => {
-              setSelectedKey(null);
-              setLeftMode("channels");
-            }}
-            className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15"
-          >
+          <button onClick={() => { setSelectedKey(null); setLeftMode("channels"); }} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15">
             + New
           </button>
           <div className="font-semibold truncate">{activeChat ? activeChat.title : "CriptAi"}</div>
@@ -431,68 +341,45 @@ export default function AppHome() {
             <FormComp
               onCancel={() => setSelectedKey(null)}
               onGenerate={async (values: Record<string, any>, options: { deepResearch?: boolean } = {}) => {
-                const title =
-                  (meta.buildTitle ? meta.buildTitle(values) : `${meta.label}: ${String(values.topic || "").slice(0, 80)}`) ||
-                  meta.label;
-
+                const title = (meta.buildTitle ? meta.buildTitle(values) : `${meta.label}: ${String(values.topic || "").slice(0, 80)}`) || meta.label;
                 const created = await startNewChat(title);
                 if (!created) return;
 
-                // Build base prompt from channel
-                let prompt = meta.buildPrompt(values, options);
-
-                // Continuation: if prevScriptText was provided by the form, inject guidance
-                if (values.prevScriptText && String(values.prevScriptText).trim().length > 0) {
-                  prompt +=
-                    "\n\n---\nCONTINUATION CONTEXT\n" +
-                    "The user supplied a previous script. Generate multiple HOOKS first, then add a brief callback to the prior episode (1–2 lines max), no repetition.\n" +
-                    "Previous script:\n" +
-                    String(values.prevScriptText).slice(0, 10000);
-                }
-
-                // Also pass hooksCount through, if channel uses it
-                if (values.hooksCount) {
-                  prompt += `\n\nTarget number of alternate hooks: ${Math.max(1, Math.min(5, Number(values.hooksCount)))}.`;
-                }
-
+                const prompt = meta.buildPrompt(values, options);
                 setSending(true);
 
                 try {
                   if (options.deepResearch) {
-                    // Use backend RAG (FastAPI) so DB + research can be combined server-side
-                    const res = await authedFetch<{ text: string; model?: string }>(`/research-generate/yt_script`, {
+                    const body = {
+                      niche: String(values.niche ?? ""),
+                      topic: String(values.topic ?? ""),
+                      audience: String(values.audience ?? ""),
+                      durationMin: Number(values.durationMin ?? 4) || 4,
+                      tone: Array.isArray(values.tones) ? values.tones.join(" + ") : String(values.tone ?? ""),
+                      prompt: String(values.customPrompt ?? values.prompt ?? ""),
+                      deepResearch: true,
+                      hooksCount: Number(values.hooksCount ?? 1) || 1,
+                      prevScriptText: String(values.prevScriptText ?? ""),
+                    };
+                    const res = await authedFetch<{ text: string; used_model?: string }>(`${API_ROOT}/research-generate/yt_script`, {
                       method: "POST",
-                      body: JSON.stringify({
-                        niche: values.niche ?? "",
-                        topic: values.topic ?? "",
-                        audience: values.audience ?? "",
-                        durationMin: Number(values.durationMin ?? 4) || 4,
-                        tone:
-                          typeof values.tone === "string"
-                            ? values.tone
-                            : Array.isArray(values.tones)
-                            ? values.tones.join(" + ")
-                            : "",
-                        prompt: String(values.customPrompt ?? values.prompt ?? ""),
-                        deepResearch: true,
-                        prevScriptText: String(values.prevScriptText || ""),
-                        hooksCount: Number(values.hooksCount || 1),
-                      }),
+                      body: JSON.stringify(body),
                     });
 
+                    // store explicit user prompt then assistant output (with model marker)
                     await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
                       method: "POST",
                       body: JSON.stringify({ content: prompt, role: "user" }),
                     });
                     await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
                       method: "POST",
-                      body: JSON.stringify({ content: res.text, role: "assistant" }),
+                      body: JSON.stringify({ content: res.text, role: "assistant", usedModel: res.used_model || null }),
                     });
 
                     const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
                     setMessages(normalizeMessages(rawList));
                   } else {
-                    // Regular generation
+                    // regular flow — backend will generate reply and save model used
                     await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
                       method: "POST",
                       body: JSON.stringify({ content: prompt }),
@@ -518,17 +405,16 @@ export default function AppHome() {
             <WelcomeCanvas />
           ) : (
             <div className="space-y-4">
+              {/* Only assistant bubbles shown */}
               {messages
                 .filter((m) => m.role === "assistant")
-                .map((m) => (
-                  <Bubble key={m._id} message={m} onContextMenu={onBubbleContextMenu} />
-                ))}
+                .map((m) => <Bubble key={m._id} message={m} onContextMenu={onBubbleContextMenu} />)}
               {error && <div className="text-red-400 text-sm bg-white/5 p-3 rounded-lg">{error}</div>}
             </div>
           )}
         </div>
 
-        {/* Composer */}
+        {/* Chat composer */}
         {!FormComp && (activeId || messages.length > 0) && (
           <div className="p-4 md:p-6 border-t border-white/10">
             <div className="max-w-4xl mx-auto flex gap-3">
@@ -545,26 +431,17 @@ export default function AppHome() {
                   }
                 }}
               />
-              <button
-                disabled={sending || !draft.trim()}
-                onClick={send}
-                className="px-5 py-3 rounded-xl bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] disabled:opacity-60"
-              >
+              <button disabled={sending || !draft.trim()} onClick={send} className="px-5 py-3 rounded-xl bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] disabled:opacity-60">
                 {sending ? "Sending…" : "Send"}
               </button>
             </div>
-            <p className="text-center text-xs text-gray-500 mt-2">
-              CriptAi may generate inaccurate information—verify important details.
-            </p>
+            <p className="text-center text-xs text-gray-500 mt-2">CriptAi may generate inaccurate information—verify important details.</p>
           </div>
         )}
 
         {/* floating paragraph edit UI */}
         {editUI.open && (
-          <div
-            className="fixed z-50 w-[min(640px,calc(100vw-32px))] p-3 rounded-xl border border-white/10 bg-[#0A0F1F] shadow-lg"
-            style={{ left: Math.max(8, editUI.x - 220), top: Math.max(8, editUI.y) }}
-          >
+          <div className="fixed z-50 w-[min(640px,calc(100vw-32px))] p-3 rounded-xl border border-white/10 bg-[#0A0F1F] shadow-lg" style={{ left: Math.max(8, editUI.x - 220), top: Math.max(8, editUI.y) }}>
             <div className="text-xs text-gray-400 mb-2">Regenerate selected paragraph</div>
             <input
               value={editUI.instruction || ""}
@@ -573,16 +450,10 @@ export default function AppHome() {
               className="w-full bg-[#0A0F1F] border border-white/10 rounded-lg px-3 py-2 mb-2 focus:outline-none focus:border-[#6C5CE7]"
             />
             <div className="flex justify-end gap-2">
-              <button
-                className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-sm"
-                onClick={() => setEditUI((s) => ({ ...s, open: false }))}
-              >
+              <button className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-sm" onClick={() => setEditUI((s) => ({ ...s, open: false }))}>
                 Cancel
               </button>
-              <button
-                className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] text-sm"
-                onClick={runParagraphEdit}
-              >
+              <button className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] text-sm" onClick={runParagraphEdit}>
                 Generate
               </button>
             </div>
@@ -590,42 +461,24 @@ export default function AppHome() {
         )}
       </main>
 
-      {/* overlay */}
+      {/* Fullscreen generating overlay */}
       {sending && <GeneratingOverlay label="Generating your script…" />}
     </div>
   );
 }
 
 /** ---------- UI bits ---------- */
-function Bubble({
-  message,
-  onContextMenu,
-}: {
-  message: Message;
-  onContextMenu?: (e: React.MouseEvent, m: Message) => void;
-}) {
+function Bubble({ message, onContextMenu }: { message: Message; onContextMenu?: (e: React.MouseEvent, m: Message) => void; }) {
   const content = normalizeHeadingsAndBadges(message.content || "");
-  const badge = modelBadge(message.meta?.model);
+  const badge = modelBadge(message.usedModel);
   return (
-    <div
-      onContextMenu={(e) => onContextMenu?.(e, message)}
-      className="max-w-3xl mx-auto rounded-2xl p-4 md:p-5 border bg-white/5 border-[#6C5CE7]/30"
-    >
+    <div onContextMenu={(e) => onContextMenu?.(e, message)} className="max-w-3xl mx-auto rounded-2xl p-4 md:p-5 border bg-white/5 border-[#6C5CE7]/30">
       <div className="text-xs uppercase tracking-wider mb-2 text-gray-400 flex items-center gap-2">
-        CRIPTAI
-        {badge && (
-          <span
-            title={message.meta?.model || ""}
-            className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/10 border border-white/15 text-[10px] text-gray-300"
-          >
-            {badge}
-          </span>
-        )}
+        <span>CriptAi</span>
+        {badge && <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/10 border border-white/15 text-[10px]">{badge}</span>}
       </div>
       <div className={styles.proseWrap}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-          {content}
-        </ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{content}</ReactMarkdown>
       </div>
     </div>
   );
@@ -637,13 +490,9 @@ function WelcomeCanvas() {
       <div className="max-w-4xl mx-auto text-center">
         <div className="text-sm text-gray-400 mb-2">Start a new chat to begin.</div>
         <h1 className="text-3xl md:text-5xl font-extrabold mb-3">
-          <span className="bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] bg-clip-text text-transparent">Welcome</span>{" "}
-          to CriptAi by AdLobby
+          <span className="bg-gradient-to-r from-[#6C5CE7] to-[#00E5FF] bg-clip-text text-transparent">Welcome</span> to CriptAi by AdLobby
         </h1>
-        <p className="text-gray-300">
-          Pick a channel on the left, fill in the brief, and click <span className="font-semibold">Start generating</span>. We’ll tailor the copy
-          for the platform automatically.
-        </p>
+        <p className="text-gray-300">Pick a channel on the left, fill in the brief, and click <span className="font-semibold">Start generating</span>. We’ll tailor the copy for the platform automatically.</p>
       </div>
     </div>
   );
@@ -655,9 +504,7 @@ function GeneratingOverlay({ label }: { label: string }) {
     <div className={styles.genOverlay}>
       <div className="flex flex-col items-center">
         <div className={styles.grid}>
-          {tiles.map((_, i) => (
-            <div key={i} className={`${styles.tile} ${i % 3 === 0 ? styles.tileDim : ""}`} />
-          ))}
+          {tiles.map((_, i) => <div key={i} className={`${styles.tile} ${i % 3 === 0 ? styles.tileDim : ""}`} />)}
         </div>
         <div className={styles.genText}>{label}</div>
       </div>
@@ -668,25 +515,16 @@ function GeneratingOverlay({ label }: { label: string }) {
 /** ---------- auth-aware fetch ---------- */
 async function authedFetch<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const supabase = getSupabase();
-  const {
-    data: { session },
-  } = (await supabase?.auth.getSession()) || { data: { session: null as any } };
-
-  // accept absolute backend routes ("/research-generate/yt_script") or API_BASE-relative
-  const finalUrl = url.startsWith("http") || url.startsWith("/") ? url : `${API_BASE}${url}`;
+  const { data: { session } } = (await supabase?.auth.getSession()) || { data: { session: null as any } };
 
   const headers = new Headers(init.headers || {});
   headers.set("content-type", "application/json");
   if (session?.access_token) headers.set("authorization", `Bearer ${session.access_token}`);
 
-  const res = await fetch(finalUrl, { ...init, headers });
+  const res = await fetch(url, { ...init, headers });
   const text = await res.text();
   let json: any = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    // ignore
-  }
+  try { json = text ? JSON.parse(text) : null; } catch {}
   if (!res.ok) throw new Error(json?.error || res.statusText);
   return (json as T) ?? ({} as T);
 }
