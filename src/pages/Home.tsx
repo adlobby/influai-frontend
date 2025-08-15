@@ -143,7 +143,7 @@ export default function Home() {
                 </a>
             </div>
 
-            <p className="text-sm text-gray-400">No credit card · 10 free generations</p>
+            <p className="text-sm text-gray-400">No credit card · 1 Month free generations</p>
             </div>
 
           {/* Orbiting logos */}
@@ -487,7 +487,7 @@ export default function Home() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {[
-              ["Do I need a credit card to start?", "No. The Starter plan includes 10 free generations—no card required."],
+              ["Do I need a credit card to start?", "No. The Starter plan includes 1 Month Free generations—no card required."],
               ["What platforms do you support?", "YouTube, Instagram (posts & reels), LinkedIn, X (Twitter), and Blogs."],
               ["Can I use my brand voice?", "Yes on Pro+ — add tone guidelines and examples; we’ll mirror your voice."],
               ["Do you store my prompts?", "We store minimal metadata to run the product; you can delete data anytime."],
