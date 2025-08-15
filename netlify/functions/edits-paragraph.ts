@@ -1,4 +1,3 @@
-// netlify/functions/edits-paragraph.ts
 import type { Handler } from "@netlify/functions";
 
 const HF_MODELS = [
@@ -16,9 +15,13 @@ const CORS_HEADERS = {
   "access-control-allow-headers": "Content-Type, Authorization",
 };
 
-function json(statusCode: number, body: any) {
-  return { statusCode, body: JSON.stringify(body), headers: CORS_HEADERS };
-}
+const json = (statusCode: number, body: any) => ({
+  statusCode,
+  body: JSON.stringify(body),
+  headers: CORS_HEADERS,
+});
+const isTaskMismatch = (msg: string) =>
+  /not supported for task|task not supported|unsupported/i.test(msg);
 
 async function hfGenerate(model: string, prompt: string) {
   if (!HF_TOKEN) throw new Error("HF_TOKEN is not configured");
@@ -42,16 +45,58 @@ async function hfGenerate(model: string, prompt: string) {
       }),
     }
   );
-  if (!res.ok) throw new Error(`HF ${model} ${res.status}: ${await res.text()}`);
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`HF ${model} ${res.status}: ${raw.slice(0, 400)}`);
 
-  const data = (await res.json()) as Array<{ generated_text?: string }>;
-  return (data?.[0]?.generated_text || "").trim();
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = raw;
+  }
+  const text = Array.isArray(data)
+    ? data[0]?.generated_text ?? ""
+    : data?.generated_text ?? "";
+
+  return (text || "").trim();
+}
+
+async function hfChat(model: string, prompt: string) {
+  if (!HF_TOKEN) throw new Error("HF_TOKEN is not configured");
+  const res = await fetch(
+    `https://api-inference.huggingface.co/models/${encodeURIComponent(model)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        inputs: {
+          past_user_inputs: [],
+          generated_responses: [],
+          text: prompt,
+        },
+        parameters: { max_new_tokens: 300, temperature: 0.5 },
+        options: { wait_for_model: true },
+      }),
+    }
+  );
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`HF(chat) ${model} ${res.status}: ${raw.slice(0, 400)}`);
+  const data = JSON.parse(raw);
+  const text = Array.isArray(data)
+    ? data[0]?.generated_text ?? ""
+    : data?.generated_text ?? "";
+  return (text || "").trim();
 }
 
 export const handler: Handler = async (event) => {
   try {
-    if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: CORS_HEADERS } as any;
-    if (event.httpMethod !== "POST") return json(405, { error: "Method not allowed" });
+    if (event.httpMethod === "OPTIONS")
+      return { statusCode: 204, headers: CORS_HEADERS } as any;
+    if (event.httpMethod !== "POST")
+      return json(405, { error: "Method not allowed" });
 
     const {
       selected,
@@ -89,7 +134,9 @@ export const handler: Handler = async (event) => {
       audience ? `Audience: ${audience}` : "",
       tonesArr.length ? `Tone(s): ${tonesArr.join(" + ")}` : "",
       durationMin ? `Full video length target: ~${durationMin} minutes.` : "",
-      fullText ? "\nContext (do NOT repeat, just keep style coherent):\n" + fullText : "",
+      fullText
+        ? "\nContext (do NOT repeat, just keep style coherent):\n" + fullText
+        : "",
       "\nInstruction:",
       instruction,
       "\nParagraph:",
@@ -105,7 +152,18 @@ export const handler: Handler = async (event) => {
         const out = await hfGenerate(m, prompt);
         const clean = out.replace(/\n\n+/g, " ").trim();
         return json(200, { rewritten: clean || selected });
-      } catch (e) {
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        if (isTaskMismatch(msg)) {
+          try {
+            const out = await hfChat(m, prompt);
+            const clean = out.replace(/\n\n+/g, " ").trim();
+            return json(200, { rewritten: clean || selected });
+          } catch (e2) {
+            lastErr = e2;
+            continue;
+          }
+        }
         lastErr = e;
       }
     }

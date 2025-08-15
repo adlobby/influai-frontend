@@ -1,7 +1,7 @@
 import type { Handler } from "@netlify/functions";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-/** Inference API models to try (first that responds wins). */
+/** Try these models in order (first that works wins). */
 const HF_MODELS = [
   "mistralai/Mistral-7B-Instruct-v0.3",
   "HuggingFaceH4/zephyr-7b-beta",
@@ -33,6 +33,8 @@ const json = (statusCode: number, body: any) => ({
   body: JSON.stringify(body),
   headers: CORS_HEADERS,
 });
+const isTaskMismatch = (msg: string) =>
+  /not supported for task|task not supported|unsupported/i.test(msg);
 
 /* ---------- Hugging Face calls ---------- */
 
@@ -67,35 +69,93 @@ async function hfGenerate(opts: {
     }
   );
 
-  if (!res.ok) {
-    const msg = await res.text();
-    throw new Error(`HF ${model} ${res.status}: ${msg.slice(0, 300)}`);
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`HF ${model} ${res.status}: ${raw.slice(0, 400)}`);
+
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = raw;
   }
 
-  const data =
-    (await res.json()) as Array<{ generated_text?: string }> | { generated_text?: string };
-
+  // API sometimes returns array or object
   const text = Array.isArray(data)
     ? data[0]?.generated_text ?? ""
-    : data.generated_text ?? "";
+    : data?.generated_text ?? "";
 
   return (text || "").trim();
 }
 
-/** Try several models until one works. */
+/** Conversational (chat) fallback via Inference API. */
+async function hfChat(opts: {
+  model: string;
+  prompt: string;
+  maxTokens?: number;
+  temperature?: number;
+}) {
+  const { model, prompt, maxTokens = 900, temperature = 0.7 } = opts;
+  if (!HF_TOKEN) throw new Error("HF_TOKEN is not configured");
+
+  const res = await fetch(
+    `https://api-inference.huggingface.co/models/${encodeURIComponent(model)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      // minimal single-turn conversational payload
+      body: JSON.stringify({
+        inputs: {
+          past_user_inputs: [],
+          generated_responses: [],
+          text: prompt,
+        },
+        parameters: {
+          max_new_tokens: maxTokens,
+          temperature,
+        },
+        options: { wait_for_model: true },
+      }),
+    }
+  );
+
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`HF(chat) ${model} ${res.status}: ${raw.slice(0, 400)}`);
+
+  const data = JSON.parse(raw);
+  // Conversational returns { generated_text, conversation: {...} } or array
+  const text = Array.isArray(data)
+    ? data[0]?.generated_text ?? ""
+    : data?.generated_text ?? "";
+
+  return (text || "").trim();
+}
+
+/** Try text-gen first; if task mismatch/err, try chat; then next model. */
 async function generateWithFallback(prompt: string) {
   let lastErr: unknown = null;
-  for (const m of HF_MODELS) {
+  for (const model of HF_MODELS) {
     try {
-      return await hfGenerate({ model: m, prompt });
-    } catch (e) {
+      return await hfGenerate({ model, prompt });
+    } catch (e: any) {
+      const msg = String(e?.message || "");
+      if (isTaskMismatch(msg)) {
+        try {
+          return await hfChat({ model, prompt });
+        } catch (e2) {
+          lastErr = e2;
+          continue;
+        }
+      }
       lastErr = e;
     }
   }
   throw lastErr || new Error("All HF models failed");
 }
 
-/** Single-text embedding via HF feature-extraction pipeline. */
+/** Single-text embedding via HF feature-extraction. */
 async function hfEmbed(text: string) {
   if (!HF_TOKEN) throw new Error("HF_TOKEN is not configured");
 
@@ -121,7 +181,7 @@ async function hfEmbed(text: string) {
 
 /* ---------- Grounding helpers (Supabase) ---------- */
 
-/** Use your Postgres function `match_chunks` (pgvector) safely via supabase.rpc. */
+/** Use your Postgres function `match_chunks` (pgvector) via supabase.rpc. */
 async function sbMatchChunks(embedding: number[], k = 6, threshold = 0.75) {
   if (!supabase) return [] as Array<{ title?: string; content?: string }>;
 
