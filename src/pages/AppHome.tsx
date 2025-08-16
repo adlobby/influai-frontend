@@ -1,3 +1,4 @@
+// pages/AppHome.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -174,7 +175,6 @@ export default function AppHome() {
   async function deleteChat(id: string) {
     if (!confirm("Delete this chat?")) return;
     try {
-      // path version (works across hosts)
       await authedFetch(`${API_BASE}/chats/${encodeURIComponent(id)}`, { method: "DELETE" });
       setChats((prev) => {
         const updated = prev.filter((x) => x._id !== id);
@@ -245,22 +245,50 @@ export default function AppHome() {
       setEditUI((s) => ({ ...s, open: false }));
       return;
     }
+    const msg = messages.find((m) => m._id === editUI.messageId);
+    if (!msg) return;
+
+    const payload = {
+      paragraph: editUI.selected,
+      instruction: editUI.instruction,
+      full_context: msg.content,
+    };
+
     try {
-      const msg = messages.find((m) => m._id === editUI.messageId);
-      if (!msg) return;
+      // Primary: FastAPI endpoint (prefers Mistral on the backend)
+      const r1 = await authedFetch<{ text?: string; rewritten?: string; used_model?: string }>(
+        `${API_ROOT}/edit-paragraph`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      const rewritten = (r1.text || r1.rewritten || "").trim();
+      if (!rewritten) throw new Error("Empty response");
 
-      const res = await authedFetch<{ text: string; used_model?: string }>(`${API_ROOT}/edit-paragraph`, {
-        method: "POST",
-        body: JSON.stringify({ paragraph: editUI.selected, instruction: editUI.instruction, full_context: msg.content }),
-      });
-
-      const rewritten = (res.text || "").trim() || editUI.selected!;
-      const updated = (msg.content || "").replace(editUI.selected!, rewritten);
+      const updated = msg.content.replace(editUI.selected, rewritten);
       setMessages((arr) => arr.map((m) => (m._id === msg._id ? { ...m, content: updated } : m)));
       setEditUI((s) => ({ ...s, open: false }));
-    } catch (e: any) {
-      setError(e.message || "Failed to regenerate paragraph");
-      setEditUI((s) => ({ ...s, open: false }));
+    } catch {
+      try {
+        // Fallback: Netlify function (rotates HF tokens)
+        const r2 = await authedFetch<{ rewritten: string }>(
+          `/.netlify/functions/edits-paragraph`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              selected: editUI.selected,
+              instruction: editUI.instruction,
+              fullText: msg.content,
+            }),
+          }
+        );
+        const rewritten = (r2.rewritten || "").trim();
+        if (!rewritten) throw new Error("Empty fallback");
+        const updated = msg.content.replace(editUI.selected, rewritten);
+        setMessages((arr) => arr.map((m) => (m._id === msg._id ? { ...m, content: updated } : m)));
+      } catch (e: any) {
+        setError(e.message || "Failed to regenerate paragraph");
+      } finally {
+        setEditUI((s) => ({ ...s, open: false }));
+      }
     }
   }
 
@@ -322,7 +350,7 @@ export default function AppHome() {
 
         <div className="mt-auto pt-4 border-t border-white/10 text-sm text-gray-300">
           <div className="truncate">{userEmail}</div>
-          <button className="mt-2 w-full px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10" onClick={signOut}>Sign out</button>
+          <button className="mt-2 w-full px-3 py-2 rounded-lg bg_white/5 hover:bg-white/10" onClick={signOut}>Sign out</button>
         </div>
       </aside>
 
@@ -345,48 +373,40 @@ export default function AppHome() {
                 const created = await startNewChat(title);
                 if (!created) return;
 
-                const prompt = meta.buildPrompt(values, options);
                 setSending(true);
 
                 try {
-                  if (options.deepResearch) {
-                    const body = {
-                      niche: String(values.niche ?? ""),
-                      topic: String(values.topic ?? ""),
-                      audience: String(values.audience ?? ""),
-                      durationMin: Number(values.durationMin ?? 4) || 4,
-                      tone: Array.isArray(values.tones) ? values.tones.join(" + ") : String(values.tone ?? ""),
-                      prompt: String(values.customPrompt ?? values.prompt ?? ""),
-                      deepResearch: true,
-                      hooksCount: Number(values.hooksCount ?? 1) || 1,
-                      prevScriptText: String(values.prevScriptText ?? ""),
-                    };
-                    const res = await authedFetch<{ text: string; used_model?: string }>(`${API_ROOT}/research-generate/yt_script`, {
-                      method: "POST",
-                      body: JSON.stringify(body),
-                    });
+                  const body = {
+                    niche: String(values.niche ?? ""),
+                    topic: String(values.topic ?? ""),
+                    audience: String(values.audience ?? ""),
+                    durationMin: Number(values.durationMin ?? 4) || 4,
+                    tone: Array.isArray(values.tones) ? values.tones.join(" + ") : String(values.tone ?? ""),
+                    prompt: String(values.customPrompt ?? values.prompt ?? ""),
+                    deepResearch: !!options.deepResearch,
+                    hooksCount: Number(values.hooksCount ?? 1) || 1,
+                    prevScriptText: String(values.prevScriptText ?? ""),
+                  };
 
-                    // store explicit user prompt then assistant output (with model marker)
-                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-                      method: "POST",
-                      body: JSON.stringify({ content: prompt, role: "user" }),
-                    });
-                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-                      method: "POST",
-                      body: JSON.stringify({ content: res.text, role: "assistant", usedModel: res.used_model || null }),
-                    });
+                  // Generate the FULL script server-side first
+                  const res = await authedFetch<{ text: string; used_model?: string }>(
+                    `${API_ROOT}/research-generate/yt_script`,
+                    { method: "POST", body: JSON.stringify(body) }
+                  );
 
-                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-                    setMessages(normalizeMessages(rawList));
-                  } else {
-                    // regular flow — backend will generate reply and save model used
-                    await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
-                      method: "POST",
-                      body: JSON.stringify({ content: prompt }),
-                    });
-                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-                    setMessages(normalizeMessages(rawList));
-                  }
+                  // Save only after it's complete
+                  const prompt = meta.buildPrompt(values, options);
+                  await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+                    method: "POST",
+                    body: JSON.stringify({ content: prompt, role: "user" }),
+                  });
+                  await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+                    method: "POST",
+                    body: JSON.stringify({ content: res.text, role: "assistant", usedModel: res.used_model || null }),
+                  });
+
+                  const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+                  setMessages(normalizeMessages(rawList));
 
                   setSelectedKey(null);
                   setLeftMode("chats");

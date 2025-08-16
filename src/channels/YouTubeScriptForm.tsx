@@ -1,3 +1,4 @@
+// channels/YouTubeScriptForm.tsx
 import { useEffect, useMemo, useState } from "react";
 import type { ChannelFormProps } from "./types";
 import { getSupabase } from "../lib/supabase-browser";
@@ -73,7 +74,8 @@ export default function YouTubeScriptForm({ onCancel, onGenerate }: ChannelFormP
     const headers = new Headers(init.headers || {});
     headers.set("content-type", "application/json");
     if (session?.access_token) headers.set("authorization", `Bearer ${session.access_token}`);
-    const res = await fetch(url.startsWith("http") ? url : `${API_BASE}${url}`, { ...init, headers });
+    const full = url.startsWith("http") ? url : `${API_BASE}${url}`;
+    const res = await fetch(full, { ...init, headers });
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch {}
@@ -88,8 +90,8 @@ export default function YouTubeScriptForm({ onCancel, onGenerate }: ChannelFormP
       setLoadingChats(true);
       const list = await authedFetch<ChatLite[]>(`/chats`);
       setChats(list.map((c: any) => ({ _id: c._id || c.id, title: c.title })));
-    } catch (e) {
-      // silent
+    } catch {
+      // ignore
     } finally {
       setLoadingChats(false);
     }
@@ -104,7 +106,7 @@ export default function YouTubeScriptForm({ onCancel, onGenerate }: ChannelFormP
         setV(s => ({ ...s, prevScriptText: last.content }));
         setShowPrevModal(false);
       }
-    } catch (e) {
+    } catch {
       // ignore
     } finally {
       setLoadingPick(null);

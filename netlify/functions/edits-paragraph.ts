@@ -54,7 +54,7 @@ async function hfGenerate(model: string, prompt: string, token: string) {
     },
     options: { wait_for_model: true },
   });
-  const text = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
+  const text = Array.isArray(data) ? data[0]?.generated_text : (data as any)?.generated_text;
   return (text || "").trim();
 }
 
@@ -65,7 +65,7 @@ async function hfChat(model: string, prompt: string, token: string) {
     parameters: { max_new_tokens: 512, temperature: 0.5 },
     options: { wait_for_model: true },
   });
-  const text = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
+  const text = Array.isArray(data) ? data[0]?.generated_text : (data as any)?.generated_text;
   return (text || "").trim();
 }
 
