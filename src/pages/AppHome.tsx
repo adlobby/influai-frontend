@@ -1,15 +1,12 @@
-// pages/AppHome.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import styles from "./AppHome.module.css";
-
 import { getSupabase } from "../lib/supabase-browser";
 import { channelList, channelByKey } from "../channels/registry";
 import type { TemplateKey } from "../channels/types";
 
-/** ---------- Chat types ---------- */
 type Chat = { _id: string; title: string; userId?: string; createdAt?: string; updatedAt?: string };
 type Message = {
   _id: string;
@@ -22,16 +19,13 @@ type Message = {
 };
 type LeftMode = "channels" | "chats";
 
-/** API base */
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "/api";
 const API_ROOT = API_BASE.replace(/\/api\/?$/, "");
 
-/** ---------- LocalStorage keys ---------- */
 const LS_SELECTED = "ui.selectedChannel";
 const LS_LEFTMODE = "ui.leftMode";
 const LS_ACTIVE_CHAT = "chat.activeId";
 
-/** ---------- Normalizers ---------- */
 function toLocalChat(input: any): Chat {
   if (!input) return { _id: "", title: "" };
   return { _id: input._id || input.id, title: input.title, userId: input.userId, createdAt: input.createdAt, updatedAt: input.updatedAt };
@@ -58,7 +52,6 @@ function normalizeMessages(data: any): Message[] {
   return [];
 }
 
-/** ---------- Helpers ---------- */
 function normalizeHeadingsAndBadges(text: string) {
   let t = (text || "")
     .replace(/^###\s*H1:\s*/gm, "# ")
@@ -77,14 +70,12 @@ function modelBadge(model?: string | null) {
   return "·";
 }
 
-/** ---------- Page ---------- */
 export default function AppHome() {
   const supabase = getSupabase();
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [userEmail, setUserEmail] = useState<string>("");
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem(LS_ACTIVE_CHAT));
   const [messages, setMessages] = useState<Message[]>([]);
@@ -95,19 +86,18 @@ export default function AppHome() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // selection edit UI
   const [editUI, setEditUI] = useState<{ open: boolean; x: number; y: number; messageId?: string; selected?: string; instruction?: string; }>({ open: false, x: 0, y: 0 });
 
-  // load user email
   useEffect(() => {
     (async () => {
       const ses = await supabase?.auth.getSession();
       const email = ses?.data.session?.user.email;
-      if (email) setUserEmail(email);
+      if (email) {
+        // just to ensure session is valid, UI shows email in sidebar via chats fetch flow
+      }
     })();
   }, [supabase]);
 
-  // persist UI state
   useEffect(() => {
     selectedKey ? localStorage.setItem(LS_SELECTED, selectedKey) : localStorage.removeItem(LS_SELECTED);
   }, [selectedKey]);
@@ -116,7 +106,6 @@ export default function AppHome() {
     activeId ? localStorage.setItem(LS_ACTIVE_CHAT, activeId) : localStorage.removeItem(LS_ACTIVE_CHAT);
   }, [activeId]);
 
-  // fetch chats on mount
   useEffect(() => {
     (async () => {
       try {
@@ -135,7 +124,6 @@ export default function AppHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // fetch messages when active chat changes
   useEffect(() => {
     if (!activeId) return;
     (async () => {
@@ -190,7 +178,6 @@ export default function AppHome() {
     }
   }
 
-  // chat composer send
   async function send() {
     if (!activeId) {
       const created = await startNewChat();
@@ -222,7 +209,7 @@ export default function AppHome() {
   }
 
   async function signOut() {
-    await supabase?.auth.signOut();
+    await getSupabase()?.auth.signOut();
     window.location.href = "/auth";
   }
 
@@ -231,7 +218,6 @@ export default function AppHome() {
   const meta = selectedKey ? channelByKey[selectedKey] : null;
   const FormComp = meta?.Form;
 
-  // right-click regenerate (assistant only)
   function onBubbleContextMenu(e: React.MouseEvent, message: Message) {
     if (message.role !== "assistant") return;
     const selection = window.getSelection()?.toString() || "";
@@ -245,56 +231,27 @@ export default function AppHome() {
       setEditUI((s) => ({ ...s, open: false }));
       return;
     }
-    const msg = messages.find((m) => m._id === editUI.messageId);
-    if (!msg) return;
-
-    const payload = {
-      paragraph: editUI.selected,
-      instruction: editUI.instruction,
-      full_context: msg.content,
-    };
-
     try {
-      // Primary: FastAPI endpoint (prefers Mistral on the backend)
-      const r1 = await authedFetch<{ text?: string; rewritten?: string; used_model?: string }>(
-        `${API_ROOT}/edit-paragraph`,
-        { method: "POST", body: JSON.stringify(payload) }
-      );
-      const rewritten = (r1.text || r1.rewritten || "").trim();
-      if (!rewritten) throw new Error("Empty response");
+      const msg = messages.find((m) => m._id === editUI.messageId);
+      if (!msg) return;
 
-      const updated = msg.content.replace(editUI.selected, rewritten);
+      const res = await authedFetch<{ text: string; used_model?: string }>(`${API_ROOT}/edit-paragraph`, {
+        method: "POST",
+        body: JSON.stringify({ paragraph: editUI.selected, instruction: editUI.instruction, full_context: msg.content }),
+      });
+
+      const rewritten = (res.text || "").trim() || editUI.selected!;
+      const updated = (msg.content || "").replace(editUI.selected!, rewritten);
       setMessages((arr) => arr.map((m) => (m._id === msg._id ? { ...m, content: updated } : m)));
       setEditUI((s) => ({ ...s, open: false }));
-    } catch {
-      try {
-        // Fallback: Netlify function (rotates HF tokens)
-        const r2 = await authedFetch<{ rewritten: string }>(
-          `/.netlify/functions/edits-paragraph`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              selected: editUI.selected,
-              instruction: editUI.instruction,
-              fullText: msg.content,
-            }),
-          }
-        );
-        const rewritten = (r2.rewritten || "").trim();
-        if (!rewritten) throw new Error("Empty fallback");
-        const updated = msg.content.replace(editUI.selected, rewritten);
-        setMessages((arr) => arr.map((m) => (m._id === msg._id ? { ...m, content: updated } : m)));
-      } catch (e: any) {
-        setError(e.message || "Failed to regenerate paragraph");
-      } finally {
-        setEditUI((s) => ({ ...s, open: false }));
-      }
+    } catch (e: any) {
+      setError(e.message || "Failed to regenerate paragraph");
+      setEditUI((s) => ({ ...s, open: false }));
     }
   }
 
   return (
     <div className="h-screen overflow-hidden flex bg-gradient-to-br from-[#05060C] to-[#0A0F1F] text-white">
-      {/* Sidebar */}
       <aside className="w-72 h-full border-r border-white/10 p-4 hidden md:flex flex-col overflow-y-auto">
         <div className="mb-4">
           <div className="flex items-center justify-between">
@@ -349,12 +306,10 @@ export default function AppHome() {
         )}
 
         <div className="mt-auto pt-4 border-t border-white/10 text-sm text-gray-300">
-          <div className="truncate">{userEmail}</div>
-          <button className="mt-2 w-full px-3 py-2 rounded-lg bg_white/5 hover:bg-white/10" onClick={signOut}>Sign out</button>
+          <button className="mt-2 w-full px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10" onClick={signOut}>Sign out</button>
         </div>
       </aside>
 
-      {/* Main */}
       <main className="flex-1 h-full min-h-0 flex flex-col">
         <header className="md:hidden p-3 border-b border-white/10 flex items-center gap-2">
           <button onClick={() => { setSelectedKey(null); setLeftMode("channels"); }} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15">
@@ -363,7 +318,6 @@ export default function AppHome() {
           <div className="font-semibold truncate">{activeChat ? activeChat.title : "CriptAi"}</div>
         </header>
 
-        {/* Chat area */}
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 md:p-8">
           {FormComp && meta ? (
             <FormComp
@@ -373,40 +327,46 @@ export default function AppHome() {
                 const created = await startNewChat(title);
                 if (!created) return;
 
+                const prompt = meta.buildPrompt(values, options);
                 setSending(true);
 
                 try {
-                  const body = {
-                    niche: String(values.niche ?? ""),
-                    topic: String(values.topic ?? ""),
-                    audience: String(values.audience ?? ""),
-                    durationMin: Number(values.durationMin ?? 4) || 4,
-                    tone: Array.isArray(values.tones) ? values.tones.join(" + ") : String(values.tone ?? ""),
-                    prompt: String(values.customPrompt ?? values.prompt ?? ""),
-                    deepResearch: !!options.deepResearch,
-                    hooksCount: Number(values.hooksCount ?? 1) || 1,
-                    prevScriptText: String(values.prevScriptText ?? ""),
-                  };
+                  if (options.deepResearch) {
+                    const body = {
+                      niche: String(values.niche ?? ""),
+                      topic: String(values.topic ?? ""),
+                      audience: String(values.audience ?? ""),
+                      durationMin: Number(values.durationMin ?? 4) || 4,
+                      tone: Array.isArray(values.tones) ? values.tones.join(" + ") : String(values.tone ?? ""),
+                      prompt: String(values.customPrompt ?? values.prompt ?? ""),
+                      deepResearch: true,
+                      hooksCount: Number(values.hooksCount ?? 1) || 1,
+                      prevScriptText: String(values.prevScriptText ?? ""),
+                    };
+                    const res = await authedFetch<{ text: string; used_model?: string }>(`${API_ROOT}/research-generate/yt_script`, {
+                      method: "POST",
+                      body: JSON.stringify(body),
+                    });
 
-                  // Generate the FULL script server-side first
-                  const res = await authedFetch<{ text: string; used_model?: string }>(
-                    `${API_ROOT}/research-generate/yt_script`,
-                    { method: "POST", body: JSON.stringify(body) }
-                  );
+                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+                      method: "POST",
+                      body: JSON.stringify({ content: prompt, role: "user" }),
+                    });
+                    await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
+                      method: "POST",
+                      body: JSON.stringify({ content: res.text, role: "assistant", usedModel: res.used_model || null }),
+                    });
 
-                  // Save only after it's complete
-                  const prompt = meta.buildPrompt(values, options);
-                  await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-                    method: "POST",
-                    body: JSON.stringify({ content: prompt, role: "user" }),
-                  });
-                  await authedFetch(`${API_BASE}/chats/${created._id}/messages`, {
-                    method: "POST",
-                    body: JSON.stringify({ content: res.text, role: "assistant", usedModel: res.used_model || null }),
-                  });
-
-                  const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
-                  setMessages(normalizeMessages(rawList));
+                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+                    setMessages(normalizeMessages(rawList));
+                  } else {
+                    await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`, {
+                      method: "POST",
+                      body: JSON.stringify({ content: prompt }),
+                    });
+                    const rawList = await authedFetch<any>(`${API_BASE}/chats/${created._id}/messages`);
+                    setMessages(normalizeMessages(rawList));
+                  }
 
                   setSelectedKey(null);
                   setLeftMode("chats");
@@ -425,7 +385,6 @@ export default function AppHome() {
             <WelcomeCanvas />
           ) : (
             <div className="space-y-4">
-              {/* Only assistant bubbles shown */}
               {messages
                 .filter((m) => m.role === "assistant")
                 .map((m) => <Bubble key={m._id} message={m} onContextMenu={onBubbleContextMenu} />)}
@@ -434,7 +393,6 @@ export default function AppHome() {
           )}
         </div>
 
-        {/* Chat composer */}
         {!FormComp && (activeId || messages.length > 0) && (
           <div className="p-4 md:p-6 border-t border-white/10">
             <div className="max-w-4xl mx-auto flex gap-3">
@@ -459,7 +417,6 @@ export default function AppHome() {
           </div>
         )}
 
-        {/* floating paragraph edit UI */}
         {editUI.open && (
           <div className="fixed z-50 w-[min(640px,calc(100vw-32px))] p-3 rounded-xl border border-white/10 bg-[#0A0F1F] shadow-lg" style={{ left: Math.max(8, editUI.x - 220), top: Math.max(8, editUI.y) }}>
             <div className="text-xs text-gray-400 mb-2">Regenerate selected paragraph</div>
@@ -481,13 +438,11 @@ export default function AppHome() {
         )}
       </main>
 
-      {/* Fullscreen generating overlay */}
       {sending && <GeneratingOverlay label="Generating your script…" />}
     </div>
   );
 }
 
-/** ---------- UI bits ---------- */
 function Bubble({ message, onContextMenu }: { message: Message; onContextMenu?: (e: React.MouseEvent, m: Message) => void; }) {
   const content = normalizeHeadingsAndBadges(message.content || "");
   const badge = modelBadge(message.usedModel);
@@ -532,7 +487,6 @@ function GeneratingOverlay({ label }: { label: string }) {
   );
 }
 
-/** ---------- auth-aware fetch ---------- */
 async function authedFetch<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const supabase = getSupabase();
   const { data: { session } } = (await supabase?.auth.getSession()) || { data: { session: null as any } };
